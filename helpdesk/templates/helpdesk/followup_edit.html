@@ -25,6 +25,9 @@
             <dt><label for="id_new_status">New Status:</label></dt>
             <dd>{{ form.new_status }}</dd>
                 <p>If the status was changed, what was it changed to?</p>
+            <dt><label for="id_time_spent">Time spent:</label></dt>
+            <dd>{{ form.time_spent }}</dd>
+                <p>How many minutes were spent resolving the issue?</p>
         </fieldset>
         <p><input type="submit" value="Submit"></p>{% csrf_token %}
     </form>

@@ -24,6 +24,12 @@
 </tr>
 
 <tr class='{% cycle rowcolors %}'>
+    <th>{% trans "Total time spent" %}</th>
+    <td>{{ ticket.get_time_spent }} {% trans "minutes" %}</td>
+</tr>
+
+
+<tr class='{% cycle rowcolors %}'>
     <th>{% trans "Copies To" %}</th>
     <td>{% for ticketcc in ticket.ticketcc_set.all %}{{ ticketcc.display }}{% if not forloop.last %}, {% endif %}{% endfor %} <strong><a href='{% url helpdesk_ticket_cc ticket.id %}'>{% trans "Manage" %}</a></strong></td>
 </tr>

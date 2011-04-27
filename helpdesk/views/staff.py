@@ -108,6 +108,7 @@ def followup_edit(request, ticket_id, followup_id, ):
                                       'comment': escape(followup.comment),
                                       'public': followup.public,
                                       'new_status': followup.new_status,
+                                      'time_spent': followup.time_spent,
                                       })
         
         return render_to_response('helpdesk/followup_edit.html',
@@ -124,10 +125,11 @@ def followup_edit(request, ticket_id, followup_id, ):
             comment = form.cleaned_data['comment']
             public = form.cleaned_data['public']
             new_status = form.cleaned_data['new_status']
+            new_time_spent = form.cleaned_data['time_spent']
             #will save previous date
             old_date = followup.date
             followup.delete()
-            new_followup = FollowUp(title=title, date=old_date, ticket=_ticket, comment=comment, public=public, new_status=new_status, )
+            new_followup = FollowUp(title=title, date=old_date, ticket=_ticket, comment=comment, public=public, new_status=new_status, time_spent=new_time_spent, )
             new_followup.save()
         return HttpResponseRedirect(reverse('helpdesk_view', args=[ticket.id]))
             
@@ -181,6 +183,7 @@ def update_ticket(request, ticket_id, public=False):
     owner = int(request.POST.get('owner', None))
     priority = int(request.POST.get('priority', ticket.priority))
     tags = request.POST.get('tags', '')
+    time_spent = request.POST.get('time_spent', 0)
 
     # We need to allow the 'ticket' and 'queue' contexts to be applied to the
     # comment.
@@ -195,6 +198,7 @@ def update_ticket(request, ticket_id, public=False):
 
     if request.user.is_staff:
         f.user = request.user
+        f.time_spent = time_spent
 
     f.public = public
 

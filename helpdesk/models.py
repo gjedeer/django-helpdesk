@@ -413,6 +413,13 @@ class Ticket(models.Model):
             )
     staff_url = property(_get_staff_url)
 
+    def get_time_spent(self):
+        """
+        Returns amount of time spent on all followups to this ticket (min)
+        """
+        return FollowUp.objects.filter(ticket=self).aggregate(models.Sum('time_spent'))['time_spent__sum']
+
+
     if HAS_TAG_SUPPORT:
         tags = TagField(blank=True)
 
@@ -505,6 +512,12 @@ class FollowUp(models.Model):
         null=True,
         help_text=_('If the status was changed, what was it changed to?'),
         )
+
+    time_spent = models.IntegerField(
+        _('Time spent'),
+        default=0,
+        help_text=_('How many minutes were spent resolving the issue?'),
+    )
 
     objects = FollowUpManager()
 
