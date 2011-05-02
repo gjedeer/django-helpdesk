@@ -900,10 +900,13 @@ def run_report(request, report):
 
     if report in ('queuemonth', 'usermonth'):
         chart_url = line_chart([columns] + data)
+        charttype = 'date'
     elif report in ('queuestatus', 'queuepriority', 'userstatus', 'userpriority'):
         chart_url = bar_chart([columns] + data)
+        charttype = 'bar'
     else:
         chart_url = ''
+        charttype = ''
 
     return render_to_response('helpdesk/report_output.html',
         RequestContext(request, {
@@ -911,6 +914,7 @@ def run_report(request, report):
             'data': data,
             'chart': chart_url,
             'title': title,
+            'charttype': charttype,
         }))
 run_report = staff_member_required(run_report)
 
