@@ -517,6 +517,7 @@ def ticket_list(request):
                 # Go on to standard keyword searching
                 pass
 
+    saved_query = None
     if request.GET.get('saved_query', None):
         from_saved_query = True
         try:
@@ -638,6 +639,7 @@ def ticket_list(request):
             user_saved_queries=user_saved_queries,
             query_params=query_params,
             from_saved_query=from_saved_query,
+            saved_query=saved_query,
             search_message=search_message,
             tags_enabled=HAS_TAG_SUPPORT
         )))
