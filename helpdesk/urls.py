@@ -120,6 +120,10 @@ urlpatterns += patterns('helpdesk.views.public',
     url(r'^view/$',
         'view_ticket',
         name='helpdesk_public_view'),
+
+    url(r'^contactform$',
+        'contactform',
+        name='contactform_submit'),
 )
 
 urlpatterns += patterns('',

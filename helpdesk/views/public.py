@@ -14,11 +14,11 @@ from django.http import HttpResponseRedirect, Http404, HttpResponse
 from django.shortcuts import render_to_response, get_object_or_404
 from django.template import loader, Context, RequestContext
 from django.utils.translation import ugettext as _
+from django.views.decorators.csrf import csrf_exempt
 
 from helpdesk.forms import PublicTicketForm
 from helpdesk.lib import send_templated_mail, text_is_spam
 from helpdesk.models import Ticket, Queue, UserSettings
-
 
 def homepage(request):
     if request.user.is_staff:
@@ -111,3 +111,23 @@ def view_ticket(request):
             'error_message': error_message,
         }))
 
+@csrf_exempt
+def contactform(request):
+    if request.method == 'POST':
+        post = request.POST.copy()
+        post['queue'] = 2 # sales
+        post['priority'] = 5
+        form = PublicTicketForm(post, {})
+        form.fields['queue'].choices = [('', '--------')] + [[q.id, q.title] for q in Queue.objects.filter(allow_public_submission=True)]
+        if form.is_valid():
+            if text_is_spam(form.cleaned_data['body'], request):
+                # This submission is spam. Let's not save it.
+                return render_to_response('helpdesk/public_spam.html', RequestContext(request, {}))
+            else:
+                ticket = form.save()
+                return HttpResponseRedirect('/contact-thank-you.html')
+        else:
+            return HttpResponse(str(form.errors));
+
+    else:
+        return HttpResponse('POST!');
