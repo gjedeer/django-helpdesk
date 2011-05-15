@@ -51,6 +51,7 @@
 <div class='followup'>
 <div class='title'>
     {{ followup.title }} <span class='byline'>{% if followup.user %}by {{ followup.user }}{% endif %} <span title='{{ followup.date|date:"r" }}'>{{ followup.date|timesince }} ago</span>{% if not followup.public %} <span class='private'>({% trans "Private" %})</span>{% endif %}</span>
+    {{ followup.time_spent }} minutes spent
     <a href="{% url helpdesk_followup_edit ticket.id followup.id %}" class='followup-edit'><img width="60" height="15" title="Edit" alt="Edit" src="{{ STATIC_URL }}helpdesk/buttons/edit.png"></a>
 </div>
 <span class='followup-desc'>{% if followup.comment %}{{ followup.comment|force_escape|urlizetrunc:50|num_to_link|linebreaksbr }}{% endif %}</span>
@@ -110,8 +111,9 @@
         {% endifequal %}
     
         <dt><label for='id_public'>{% trans "Is this update public?" %}</label> <span class='form_optional'>(Optional)</span></dt>
-        <dd><input type='checkbox' name='public' value='1' checked='checked' /></dD>
-        <dd class='form_help_text'>{% trans "If this is public, the submitter will be e-mailed your comment or resolution." %}</dd>
+        <dd><input type='checkbox' name='public' value='1' checked='checked' /></dd>
+        <dt><label for='id_time_spent'>{% trans "How much time has been spent?" %}</label> <span class='form_optional'>(Optional)</span></dt>
+        <dd><input type='text' name='time_spent' value='0' size='4' /> minutes</dd>
     </dl>
 
 <p id='ShowFurtherOptPara'><a href='#' id='ShowFurtherEditOptions'>{% trans "Change Further Details &raquo;" %}</a></p>

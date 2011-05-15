@@ -22,6 +22,11 @@
     <td>{{ ticket.get_priority_display }}</td>
 </tr>
 
+<tr class='{% cycle rowcolors %}'>
+    <th>{% trans "Total time spent" %}</th>
+    <td>{{ ticket.get_time_spent }} {% trans "minutes" %}</td>
+</tr>
+
 {% for customfield in ticket.ticketcustomfieldvalue_set.all %}
 <tr class='{% cycle rowcolors %}'>
     <th>{{ customfield.field.label }}</th>
@@ -56,7 +61,9 @@
 {% load ticket_to_link %}
 {% for followup in ticket.followup_set.public_followups %}
 <div class='followup'>
-<div class='title'>{{ followup.title }} <span class='byline'>{% if followup.user %}by {{ followup.user }}{% endif %} <span title='{{ followup.date|date:"r" }}'>{{ followup.date|timesince }} ago</span></span></div>
+    <div class='title'>{{ followup.title }} <span class='byline'>{% if followup.user %}by {{ followup.user }}{% endif %} <span title='{{ followup.date|date:"r" }}'>{{ followup.date|timesince }} ago</span></span>
+        {% if followup.user.is_staff %}{{ followup.time_spent }} minutes spent{% endif %}
+    </div>
 {{ followup.comment|force_escape|urlizetrunc:50|num_to_link|linebreaksbr }}
 {% if followup.ticketchange_set.all %}<div class='changes'><ul>
 {% for change in followup.ticketchange_set.all %}
