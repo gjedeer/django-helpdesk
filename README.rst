@@ -12,6 +12,11 @@ Complete documentation is available in the docs/ directory, or online at http://
 
 You can see a demo installation at http://demo.jutdahelpdesk.com
 
+Changes from original
+=====================
+* Tracking of time spent per ticket added
+* Simplified lead form submission added
+
 Licensing
 =========
 
