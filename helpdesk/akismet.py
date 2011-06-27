@@ -317,7 +317,7 @@ class Akismet(object):
         # we *don't* trap the error here
         # so if akismet is down it will raise an HTTPError or URLError
         headers = {'User-Agent' : self.user_agent}
-        resp = self._safeRequest(url, urlencode(data), headers)
+        resp = self._safeRequest(url, urlencode(data.encode('utf-8')), headers)
         if DEBUG:
             return resp
         resp = resp.lower()
