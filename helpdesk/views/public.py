@@ -8,6 +8,7 @@ views/public.py - All public facing views, eg non-staff (no authentication
 """
 
 from datetime import datetime
+import urlparse
 
 from django.core.urlresolvers import reverse
 from django.http import HttpResponseRedirect, Http404, HttpResponse
@@ -132,7 +133,12 @@ def contactform(request):
                 return render_to_response('helpdesk/public_spam.html', RequestContext(request, {}))
             else:
                 ticket = form.save()
-                return HttpResponseRedirect('/contact-thank-you.html')
+                # Return to thank you page on refering page, if known
+                if 'HTTP_REFERER' in request.META:
+                    return HttpResponseRedirect(urlparse.urljoin(request.META['HTTP_REFERER'], '/contact-thank-you.html'))
+                    
+                else:
+                    return HttpResponseRedirect('/contact-thank-you.html')
         else:
             return HttpResponse(str(form.errors));
 

@@ -57,6 +57,7 @@ Usage example::
 
 import os, sys
 from urllib import urlencode
+from django.utils.encoding import smart_str
 
 import socket
 if hasattr(socket, 'setdefaulttimeout'):
@@ -317,7 +318,7 @@ class Akismet(object):
         # we *don't* trap the error here
         # so if akismet is down it will raise an HTTPError or URLError
         headers = {'User-Agent' : self.user_agent}
-        resp = self._safeRequest(url, urlencode(data.encode('utf-8')), headers)
+        resp = self._safeRequest(url, urlencode(data), headers)
         if DEBUG:
             return resp
         resp = resp.lower()
