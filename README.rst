@@ -3,6 +3,8 @@ django-helpdesk - A Django powered ticket tracker for small enterprise.
 
 Copyright 2009-11 Jutda and Ross Poulton. All Rights Reserved. See LICENSE for details.
 
+This is my little fork of django-helpdesk which I run on http://massivescale.net/ for sales and support.
+
 django-helpdesk was formerly known as Jutda Helpdesk, named after the 
 company who originally created it. As of January 2011 the name has been 
 changed to reflect what it really is: a Django-powered ticket tracker with
@@ -12,8 +14,8 @@ Complete documentation is available in the docs/ directory, or online at http://
 
 You can see a demo installation at http://demo.jutdahelpdesk.com
 
-Changes from original
-=====================
+Changes from rossp's original
+=============================
 * Tracking of time spent per ticket added
 * Simplified lead form submission added
 
