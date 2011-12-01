@@ -499,6 +499,9 @@ class PublicTicketForm(forms.Form):
             )
         messages_sent_to.append(t.submitter_email)
 
+	print q.__dict__
+	print messages_sent_to
+
         if q.new_ticket_cc and q.new_ticket_cc not in messages_sent_to:
             send_templated_mail(
                 'newticket_cc',
