@@ -7,7 +7,7 @@ views/staff.py - The bulk of the application - provides most business logic and
                  renders all staff-facing views.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import sys
 
 from django.conf import settings
@@ -15,6 +15,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.files.base import ContentFile
 from django.core.urlresolvers import reverse
+from django.core.exceptions import ValidationError
 from django.core import paginator
 from django.db import connection
 from django.db.models import Q
@@ -23,18 +24,28 @@ from django.shortcuts import render_to_response, get_object_or_404
 from django.template import loader, Context, RequestContext
 from django.utils.translation import ugettext as _
 from django.utils.html import escape
+from django import forms
 
 from helpdesk.forms import TicketForm, UserSettingsForm, EmailIgnoreForm, EditTicketForm, TicketCCForm, EditFollowUpForm, TicketDependencyForm
 from helpdesk.lib import send_templated_mail, query_to_dict, apply_query, safe_template_context
 from helpdesk.models import Ticket, Queue, FollowUp, TicketChange, PreSetReply, Attachment, SavedSearch, IgnoreEmail, TicketCC, TicketDependency
 from helpdesk.settings import HAS_TAG_SUPPORT
+from helpdesk import settings as helpdesk_settings
   
 if HAS_TAG_SUPPORT:
     from tagging.models import Tag, TaggedItem
 
-staff_member_required = user_passes_test(lambda u: u.is_authenticated() and u.is_active and u.is_staff)
-superuser_required = user_passes_test(lambda u: u.is_authenticated() and u.is_active and u.is_superuser)
+if helpdesk_settings.HELPDESK_ALLOW_NON_STAFF_TICKET_UPDATE:
+    # treat 'normal' users like 'staff'
+    staff_member_required = user_passes_test(lambda u: u.is_authenticated() and u.is_active)
+else:
+    try:
+        from django.contrib.admin.views.decorators import staff_member_required
+    except:
+        staff_member_required = user_passes_test(lambda u: u.is_authenticated() and u.is_active and u.is_staff)
 
+
+superuser_required = user_passes_test(lambda u: u.is_authenticated() and u.is_active and u.is_superuser)
 
 
 def dashboard(request):
@@ -44,17 +55,36 @@ def dashboard(request):
     with options for them to 'Take' ownership of said tickets.
     """
 
+    # open & reopened tickets, assigned to current user
     tickets = Ticket.objects.filter(
             assigned_to=request.user,
         ).exclude(
-            status=Ticket.CLOSED_STATUS,
+            status__in = [Ticket.CLOSED_STATUS, Ticket.RESOLVED_STATUS],
         )
+
+    # closed & resolved tickets, assigned to current user
+    tickets_closed_resolved =  Ticket.objects.filter(
+            assigned_to=request.user, 
+            status__in = [Ticket.CLOSED_STATUS, Ticket.RESOLVED_STATUS])
 
     unassigned_tickets = Ticket.objects.filter(
             assigned_to__isnull=True,
         ).exclude(
             status=Ticket.CLOSED_STATUS,
         )
+
+    # all tickets, reported by current user
+    all_tickets_reported_by_current_user = ''
+    email_current_user = request.user.email
+    if email_current_user:
+        all_tickets_reported_by_current_user = Ticket.objects.filter(
+            submitter_email=email_current_user,
+        ).order_by('status')
+
+    # calculate basic ticket stats if requested
+    basic_ticket_stats = False
+    if helpdesk_settings.HELPDESK_DASHBOARD_BASIC_TICKET_STATS:
+        basic_ticket_stats = calc_basic_ticket_stats(Ticket)
 
     # The following query builds a grid of queues & ticket statuses,
     # to be displayed to the user. EG:
@@ -74,13 +104,44 @@ def dashboard(request):
             GROUP BY queue, name
             ORDER BY q.id;
     """)
+    if helpdesk_settings.HELPDESK_DASHBOARD_HIDE_EMPTY_QUEUES:
+        cursor.execute("""
+            SELECT      q.id as queue,
+                        q.title AS name,
+                        COUNT(CASE t.status WHEN '1' THEN t.id WHEN '2' THEN t.id END) AS open,
+                        COUNT(CASE t.status WHEN '3' THEN t.id END) AS resolved,
+                        COUNT(CASE t.status WHEN '4' THEN t.id END) AS closed
+                FROM    helpdesk_ticket t,
+                        helpdesk_queue q
+                WHERE   q.id = t.queue_id
+                GROUP BY queue, name
+                ORDER BY q.id;
+        """)
+    else:
+        cursor.execute("""
+            SELECT      q.id as queue,
+                        q.title AS name,
+                        COUNT(CASE t.status WHEN '1' THEN t.id WHEN '2' THEN t.id END) AS open,
+                        COUNT(CASE t.status WHEN '3' THEN t.id END) AS resolved,
+                        COUNT(CASE t.status WHEN '4' THEN t.id END) AS closed
+                FROM    helpdesk_queue q
+                LEFT OUTER JOIN helpdesk_ticket t
+                ON      q.id = t.queue_id            
+                GROUP BY queue, name
+                ORDER BY q.id;
+        """)    
+    
+    
     dash_tickets = query_to_dict(cursor.fetchall(), cursor.description)
 
     return render_to_response('helpdesk/dashboard.html',
         RequestContext(request, {
             'user_tickets': tickets,
+            'user_tickets_closed_resolved': tickets_closed_resolved,
             'unassigned_tickets': unassigned_tickets,
+            'all_tickets_reported_by_current_user': all_tickets_reported_by_current_user,
             'dash_tickets': dash_tickets,
+            'basic_ticket_stats': basic_ticket_stats,
         }))
 dashboard = staff_member_required(dashboard)
 
@@ -98,7 +159,7 @@ def delete_ticket(request, ticket_id):
         return HttpResponseRedirect(reverse('helpdesk_home'))
 delete_ticket = staff_member_required(delete_ticket)
 
-def followup_edit(request, ticket_id, followup_id, ):
+def followup_edit(request, ticket_id, followup_id):
     "Edit followup options with an ability to change the ticket."
     followup = get_object_or_404(FollowUp, id=followup_id)
     ticket = get_object_or_404(Ticket, id=ticket_id)
@@ -111,12 +172,15 @@ def followup_edit(request, ticket_id, followup_id, ):
                                       'new_status': followup.new_status,
                                       'time_spent': followup.time_spent,
                                       })
-        
+
+        ticketcc_string, SHOW_SUBSCRIBE = return_ticketccstring_and_show_subscribe(request.user, ticket)
+
         return render_to_response('helpdesk/followup_edit.html',
             RequestContext(request, {
                 'followup': followup,
                 'ticket': ticket,
                 'form': form,
+                'ticketcc_string': ticketcc_string,
         }))
     elif request.method == 'POST':
         form = EditFollowUpForm(request.POST)
@@ -129,11 +193,34 @@ def followup_edit(request, ticket_id, followup_id, ):
             new_time_spent = form.cleaned_data['time_spent']
             #will save previous date
             old_date = followup.date
-            followup.delete()
             new_followup = FollowUp(title=title, date=old_date, ticket=_ticket, comment=comment, public=public, new_status=new_status, time_spent=new_time_spent, )
+            # keep old user if one did exist before.
+            if followup.user:
+                new_followup.user = followup.user
             new_followup.save()
+            # get list of old attachments & link them to new_followup
+            attachments = Attachment.objects.filter(followup = followup)
+            for attachment in attachments:
+                attachment.followup = new_followup
+                attachment.save()
+            # delete old followup
+            followup.delete()
         return HttpResponseRedirect(reverse('helpdesk_view', args=[ticket.id]))
-            
+followup_edit = staff_member_required(followup_edit)
+
+def followup_delete(request, ticket_id, followup_id):
+    ''' followup delete for superuser'''
+
+    ticket = get_object_or_404(Ticket, id=ticket_id)
+    if not request.user.is_superuser:
+        return HttpResponseRedirect(reverse('helpdesk_view', args=[ticket.id]))
+
+    followup = get_object_or_404(FollowUp, id=followup_id)
+    followup.delete()
+    return HttpResponseRedirect(reverse('helpdesk_view', args=[ticket.id]))
+followup_delete = staff_member_required(followup_delete)
+
+
 def view_ticket(request, ticket_id):
     ticket = get_object_or_404(Ticket, id=ticket_id)
 
@@ -149,6 +236,13 @@ def view_ticket(request, ticket_id):
             'comment': ''
         }
         return update_ticket(request, ticket_id)
+
+    if request.GET.has_key('subscribe'):
+        # Allow the user to subscribe him/herself to the ticket whilst viewing it.
+        ticketcc_string, SHOW_SUBSCRIBE = return_ticketccstring_and_show_subscribe(request.user, ticket)
+        if SHOW_SUBSCRIBE:
+            subscribe_staff_member_to_ticket(ticket, request.user)
+            return HttpResponseRedirect(reverse('helpdesk_view', args=[ticket.id]))
 
     if request.GET.has_key('close') and ticket.status == Ticket.RESOLVED_STATUS:
         if not ticket.assigned_to:
@@ -168,20 +262,77 @@ def view_ticket(request, ticket_id):
 
         return update_ticket(request, ticket_id)
 
+    if helpdesk_settings.HELPDESK_STAFF_ONLY_TICKET_OWNERS:
+        users = User.objects.filter(is_active=True, is_staff=True).order_by('username')
+    else:
+        users = User.objects.filter(is_active=True).order_by('username')
+
+
+    # TODO: shouldn't this template get a form to begin with?
+    form = TicketForm(initial={'due_date':ticket.due_date})
+
+    ticketcc_string, SHOW_SUBSCRIBE = return_ticketccstring_and_show_subscribe(request.user, ticket)
+
     return render_to_response('helpdesk/ticket.html',
         RequestContext(request, {
             'ticket': ticket,
-            'active_users': User.objects.filter(is_active=True).filter(is_staff=True).order_by('username'),
+            'form': form,
+            'active_users': users,
             'priorities': Ticket.PRIORITY_CHOICES,
             'preset_replies': PreSetReply.objects.filter(Q(queues=ticket.queue) | Q(queues__isnull=True)),
             'tags_enabled': HAS_TAG_SUPPORT,
+            'ticketcc_string': ticketcc_string,
+            'SHOW_SUBSCRIBE': SHOW_SUBSCRIBE,
         }))
 view_ticket = staff_member_required(view_ticket)
 
+def return_ticketccstring_and_show_subscribe(user, ticket):
+    ''' used in view_ticket() and followup_edit()'''
+    # create the ticketcc_string and check whether current user is already 
+    # subscribed
+    username = user.username.upper()
+    useremail = user.email.upper()
+    strings_to_check = list()
+    strings_to_check.append(username)
+    strings_to_check.append(useremail)
+
+    ticketcc_string = ''
+    all_ticketcc = ticket.ticketcc_set.all()
+    counter_all_ticketcc = len(all_ticketcc) - 1
+    SHOW_SUBSCRIBE = True
+    for i, ticketcc in enumerate(all_ticketcc):
+        ticketcc_this_entry = str(ticketcc.display)
+        ticketcc_string = ticketcc_string + ticketcc_this_entry
+        if i < counter_all_ticketcc:
+            ticketcc_string = ticketcc_string + ', '
+        if strings_to_check.__contains__(ticketcc_this_entry.upper()):
+            SHOW_SUBSCRIBE = False
+
+    # check whether current user is a submitter or assigned to ticket
+    assignedto_username = str(ticket.assigned_to).upper()
+    submitter_email = ticket.submitter_email.upper()
+    strings_to_check = list()
+    strings_to_check.append(assignedto_username)
+    strings_to_check.append(submitter_email)
+    if strings_to_check.__contains__(username) or strings_to_check.__contains__(useremail):
+        SHOW_SUBSCRIBE = False
+
+    return ticketcc_string, SHOW_SUBSCRIBE
+
+
+def subscribe_staff_member_to_ticket(ticket, user):
+    ''' used in view_ticket() and update_ticket() '''
+    ticketcc = TicketCC()
+    ticketcc.ticket = ticket
+    ticketcc.user = user
+    ticketcc.can_view = True
+    ticketcc.can_update = True
+    ticketcc.save()
+
 
 def update_ticket(request, ticket_id, public=False):
-    if not (public or (request.user.is_authenticated() and request.user.is_active and request.user.is_staff)):
-        return HttpResponseForbidden(_('Sorry, you need to login to do that.'))
+    if not (public or (request.user.is_authenticated() and request.user.is_active and (request.user.is_staff or helpdesk_settings.HELPDESK_ALLOW_NON_STAFF_TICKET_UPDATE))):
+        return HttpResponseRedirect('%s?next=%s' % (reverse('login'), request.path))
 
     ticket = get_object_or_404(Ticket, id=ticket_id)
 
@@ -189,23 +340,52 @@ def update_ticket(request, ticket_id, public=False):
     new_status = int(request.POST.get('new_status', ticket.status))
     title = request.POST.get('title', '')
     public = request.POST.get('public', False)
-    owner = int(request.POST.get('owner', None))
+    owner = int(request.POST.get('owner', -1))
     priority = int(request.POST.get('priority', ticket.priority))
+    due_date_year = int(request.POST.get('due_date_year', 0))
+    due_date_month = int(request.POST.get('due_date_month', 0))
+    due_date_day = int(request.POST.get('due_date_day', 0))
+
+    if not (due_date_year and due_date_month and due_date_day):
+        due_date = ticket.due_date
+    else:
+        if ticket.due_date:
+            due_date = ticket.due_date
+        else:
+            due_date = datetime.now()
+        due_date = due_date.replace(due_date_year, due_date_month, due_date_day)
     tags = request.POST.get('tags', '')
     time_spent = request.POST.get('time_spent', 0)
+
+    no_changes = all([
+        not request.FILES,
+        not comment,
+        new_status == ticket.status,
+        title == ticket.title,
+        priority == int(ticket.priority),
+        due_date == ticket.due_date,
+        (owner == -1) or (not owner and not ticket.assigned_to) or (owner and User.objects.get(id=owner) == ticket.assigned_to),
+        (HAS_TAG_SUPPORT and tags == ticket.tags) or not HAS_TAG_SUPPORT,
+    ])
+    if no_changes:
+        return return_to_ticket(request.user, helpdesk_settings, ticket)
 
     # We need to allow the 'ticket' and 'queue' contexts to be applied to the
     # comment.
     from django.template import loader, Context
     context = safe_template_context(ticket)
+    # this line sometimes creates problems if code is sent as a comment.
+    # if comment contains some django code, like "why does {% if bla %} crash",
+    # then the following line will give us a crash, since django expects {% if %}
+    # to be closed with an {% endif %} tag.
     comment = loader.get_template_from_string(comment).render(Context(context))
 
-    if owner is None and ticket.assigned_to:
+    if owner is -1 and ticket.assigned_to:
         owner = ticket.assigned_to.id
 
     f = FollowUp(ticket=ticket, date=datetime.now(), comment=comment)
 
-    if request.user.is_staff:
+    if request.user.is_staff or helpdesk_settings.HELPDESK_ALLOW_NON_STAFF_TICKET_UPDATE:
         f.user = request.user
         f.time_spent = time_spent
 
@@ -213,7 +393,7 @@ def update_ticket(request, ticket_id, public=False):
 
     reassigned = False
 
-    if owner is not None:
+    if owner is not -1:
         if owner != 0 and ((ticket.assigned_to and owner != ticket.assigned_to.id) or not ticket.assigned_to):
             new_user = User.objects.get(id=owner)
             f.title = _('Assigned to %(username)s') % {
@@ -221,6 +401,7 @@ def update_ticket(request, ticket_id, public=False):
                 }
             ticket.assigned_to = new_user
             reassigned = True
+        # user changed owner to 'unassign'
         elif owner == 0 and ticket.assigned_to is not None:
             f.title = _('Unassigned')
             ticket.assigned_to = None
@@ -282,6 +463,16 @@ def update_ticket(request, ticket_id, public=False):
         c.save()
         ticket.priority = priority
 
+    if due_date != ticket.due_date:
+        c = TicketChange(
+            followup=f,
+            field=_('Due on'),
+            old_value=ticket.due_date,
+            new_value=due_date,
+            )
+        c.save()
+        ticket.due_date = due_date
+
     if HAS_TAG_SUPPORT:
         if tags != ticket.tags:
             c = TicketChange(
@@ -293,8 +484,9 @@ def update_ticket(request, ticket_id, public=False):
             c.save()
             ticket.tags = tags
 
-    if f.new_status == Ticket.RESOLVED_STATUS:
-        ticket.resolution = comment
+    if new_status in [ Ticket.RESOLVED_STATUS, Ticket.CLOSED_STATUS ]:
+        if new_status == Ticket.RESOLVED_STATUS or ticket.resolution is None:
+            ticket.resolution = comment
 
     messages_sent_to = []
 
@@ -381,7 +573,19 @@ def update_ticket(request, ticket_id, public=False):
 
     ticket.save()
 
-    if request.user.is_staff:
+    # auto subscribe user if enabled
+    if helpdesk_settings.HELPDESK_AUTO_SUBSCRIBE_ON_TICKET_RESPONSE:
+        ticketcc_string, SHOW_SUBSCRIBE = return_ticketccstring_and_show_subscribe(request.user, ticket)
+        if SHOW_SUBSCRIBE:
+            subscribe_staff_member_to_ticket(ticket, request.user)
+
+    return return_to_ticket(request.user, helpdesk_settings, ticket)
+
+
+def return_to_ticket(user, helpdesk_settings, ticket):
+    ''' Helpder function for update_ticket '''
+
+    if user.is_staff or helpdesk_settings.HELPDESK_ALLOW_NON_STAFF_TICKET_UPDATE:
         return HttpResponseRedirect(ticket.get_absolute_url())
     else:
         return HttpResponseRedirect(ticket.ticket_url)
@@ -423,11 +627,11 @@ def mass_update(request):
             f = FollowUp(ticket=t, date=datetime.now(), title=_('Closed in bulk update'), public=True, user=request.user, new_status=Ticket.CLOSED_STATUS)
             f.save()
             # Send email to Submitter, Owner, Queue CC
-            context = {
-                'ticket': t,
-                'queue': t.queue,
-                'resolution': t.resolution,
-            }
+            context = safe_template_context(t)
+            context.update(
+                resolution = t.resolution,
+                queue = t.queue,
+                )
 
             messages_sent_to = []
 
@@ -480,7 +684,7 @@ mass_update = staff_member_required(mass_update)
 def ticket_list(request):
     context = {}
 
-    # Query_params will hold a dictionary of paramaters relating to
+    # Query_params will hold a dictionary of parameters relating to
     # a query, to be saved if needed:
     query_params = {
         'filtering': {},
@@ -501,8 +705,8 @@ def ticket_list(request):
         query = request.GET.get('q')
         filter = None
         if query.find('-') > 0:
-            queue, id = query.split('-')
             try:
+                queue, id = query.split('-')
                 id = int(id)
             except ValueError:
                 id = None
@@ -558,18 +762,27 @@ def ticket_list(request):
     else:
         queues = request.GET.getlist('queue')
         if queues:
-            queues = [int(q) for q in queues]
-            query_params['filtering']['queue__id__in'] = queues
+            try:
+                queues = [int(q) for q in queues]
+                query_params['filtering']['queue__id__in'] = queues
+            except ValueError:
+                pass
 
         owners = request.GET.getlist('assigned_to')
         if owners:
-            owners = [int(u) for u in owners]
-            query_params['filtering']['assigned_to__id__in'] = owners
+            try:
+                owners = [int(u) for u in owners]
+                query_params['filtering']['assigned_to__id__in'] = owners
+            except ValueError:
+                pass
 
         statuses = request.GET.getlist('status')
         if statuses:
-            statuses = [int(s) for s in statuses]
-            query_params['filtering']['status__in'] = statuses
+            try:
+                statuses = [int(s) for s in statuses]
+                query_params['filtering']['status__in'] = statuses
+            except ValueError:
+                pass
 
         date_from = request.GET.get('date_from')
         if date_from:
@@ -602,8 +815,15 @@ def ticket_list(request):
         sortreverse = request.GET.get('sortreverse', None)
         query_params['sortreverse'] = sortreverse
 
-    ticket_qs = apply_query(Ticket.objects.select_related(), query_params)
-    print >> sys.stderr,  str(ticket_qs.query)
+    try:
+        ticket_qs = apply_query(Ticket.objects.select_related(), query_params)
+    except ValidationError:
+        # invalid parameters in query, return default query
+        query_params = {
+            'filtering': {'status__in': [1, 2, 3]},
+            'sorting': 'created',
+        }
+        ticket_qs = apply_query(Ticket.objects.select_related(), query_params)
 
     ## TAG MATCHING
     if HAS_TAG_SUPPORT:
@@ -624,7 +844,7 @@ def ticket_list(request):
         tickets = ticket_paginator.page(ticket_paginator.num_pages)
 
     search_message = ''
-    if context.has_key('query') and settings.DATABASE_ENGINE.startswith('sqlite'):
+    if context.has_key('query') and settings.DATABASES['default']['ENGINE'].endswith('sqlite'):
         search_message = _('<p><strong>Note:</strong> Your keyword search is case sensitive because of your database. This means the search will <strong>not</strong> be accurate. By switching to a different database system you will gain better searching! For more information, read the <a href="http://docs.djangoproject.com/en/dev/ref/databases/#sqlite-string-matching">Django Documentation on string matching in SQLite</a>.')
 
 
@@ -634,10 +854,8 @@ def ticket_list(request):
 
     user_saved_queries = SavedSearch.objects.filter(Q(user=request.user) | Q(shared__exact=True))
 
-    query_string = []
-    for get_key, get_value in request.GET.iteritems():
-        if get_key != "page":
-            query_string.append("%s=%s" % (get_key, get_value))
+    querydict = request.GET.copy()
+    querydict.pop('page', 1)
 
     tag_choices = [] 
     if HAS_TAG_SUPPORT:
@@ -647,9 +865,9 @@ def ticket_list(request):
     return render_to_response('helpdesk/ticket_list.html',
         RequestContext(request, dict(
             context,
-            query_string="&".join(query_string),
+            query_string=querydict.urlencode(),
             tickets=tickets,
-            user_choices=User.objects.filter(is_active=True),
+            user_choices=User.objects.filter(is_active=True,is_staff=True),
             queue_choices=Queue.objects.all(),
             status_choices=Ticket.STATUS_CHOICES,
             tag_choices=tag_choices,
@@ -682,10 +900,15 @@ def edit_ticket(request, ticket_id):
 edit_ticket = staff_member_required(edit_ticket)
 
 def create_ticket(request):
+    if helpdesk_settings.HELPDESK_STAFF_ONLY_TICKET_OWNERS:
+        assignable_users = User.objects.filter(is_active=True, is_staff=True).order_by('username')
+    else:
+        assignable_users = User.objects.filter(is_active=True).order_by('username')
+        
     if request.method == 'POST':
         form = TicketForm(request.POST, request.FILES)
         form.fields['queue'].choices = [('', '--------')] + [[q.id, q.title] for q in Queue.objects.all()]
-        form.fields['assigned_to'].choices = [('', '--------')] + [[u.id, u.username] for u in User.objects.filter(is_active=True).order_by('username')]
+        form.fields['assigned_to'].choices = [('', '--------')] + [[u.id, u.username] for u in assignable_users]
         if form.is_valid():
             ticket = form.save(user=request.user)
             return HttpResponseRedirect(ticket.get_absolute_url())
@@ -698,7 +921,9 @@ def create_ticket(request):
 
         form = TicketForm(initial=initial_data)
         form.fields['queue'].choices = [('', '--------')] + [[q.id, q.title] for q in Queue.objects.all()]
-        form.fields['assigned_to'].choices = [('', '--------')] + [[u.id, u.username] for u in User.objects.filter(is_active=True).order_by('username')]
+        form.fields['assigned_to'].choices = [('', '--------')] + [[u.id, u.username] for u in assignable_users]
+        if helpdesk_settings.HELPDESK_CREATE_TICKET_HIDE_ASSIGNED_TO:
+            form.fields['assigned_to'].widget = forms.HiddenInput()
 
     return render_to_response('helpdesk/create_ticket.html',
         RequestContext(request, {
@@ -777,7 +1002,7 @@ report_index = staff_member_required(report_index)
 
 
 def run_report(request, report):
-    if Ticket.objects.all().count() == 0 or report not in ('queuemonth', 'usermonth', 'queuestatus', 'queuepriority', 'userstatus', 'userpriority', 'userqueue'):
+    if Ticket.objects.all().count() == 0 or report not in ('queuemonth', 'usermonth', 'queuestatus', 'queuepriority', 'userstatus', 'userpriority', 'userqueue', 'daysuntilticketclosedbymonth'):
         return HttpResponseRedirect(reverse("helpdesk_report_index"))
 
     report_queryset = Ticket.objects.all().select_related()
@@ -801,6 +1026,9 @@ def run_report(request, report):
 
     from collections import defaultdict
     summarytable = defaultdict(int)
+    # a second table for more complex queries
+    summarytable2 = defaultdict(int)
+
 
     months = (
         _('Jan'),
@@ -828,7 +1056,7 @@ def run_report(request, report):
     periods = []
     year, month = first_year, first_month
     working = True
-    periods.append("%s %s" % (months[month], year))
+    periods.append("%s %s" % (months[month - 1], year))
 
     while working:
         month += 1
@@ -837,7 +1065,7 @@ def run_report(request, report):
             month = 1
         if (year > last_year) or (month > last_month and year >= last_year):
             working = False
-        periods.append("%s %s" % (months[month], year))
+        periods.append("%s %s" % (months[month - 1], year))
 
     if report == 'userpriority':
         title = _('User by Priority')
@@ -881,8 +1109,13 @@ def run_report(request, report):
         possible_options = periods
         charttype = 'date'
 
+    elif report == 'daysuntilticketclosedbymonth':
+        title = _('Days until ticket closed by Month')
+        col1heading = _('Queue')
+        possible_options = periods
+        charttype = 'date'
 
-
+    metric3 = False
     for ticket in report_queryset:
         if report == 'userpriority':
             metric1 = u'%s' % ticket.get_assigned_to
@@ -898,7 +1131,7 @@ def run_report(request, report):
 
         elif report == 'usermonth':
             metric1 = u'%s' % ticket.get_assigned_to
-            metric2 = u'%s %s' % (months[ticket.created.month], ticket.created.year)
+            metric2 = u'%s %s' % (months[ticket.created.month - 1], ticket.created.year)
 
         elif report == 'queuepriority':
             metric1 = u'%s' % ticket.queue.title
@@ -910,14 +1143,29 @@ def run_report(request, report):
 
         elif report == 'queuemonth':
             metric1 = u'%s' % ticket.queue.title
-            metric2 = u'%s %s' % (months[ticket.created.month], ticket.created.year)
+            metric2 = u'%s %s' % (months[ticket.created.month - 1], ticket.created.year)
+
+        elif report == 'daysuntilticketclosedbymonth':
+            metric1 = u'%s' % ticket.queue.title
+            metric2 = u'%s %s' % (months[ticket.created.month - 1], ticket.created.year)
+            metric3 = ticket.modified - ticket.created
+            metric3 = metric3.days
+
 
         summarytable[metric1, metric2] += 1
+        if metric3:
+            if report == 'daysuntilticketclosedbymonth':
+                summarytable2[metric1, metric2] += metric3
+
     
     table = []
     
-    header1 = sorted(set(list( i.encode('utf-8') for i,_ in summarytable.keys() )))
+    if report == 'daysuntilticketclosedbymonth':
+        for key in summarytable2.keys():
+            summarytable[key] = summarytable2[key] / summarytable[key]
 
+    header1 = sorted(set(list( i.encode('utf-8') for i,_ in summarytable.keys() )))
+    
     column_headings = [col1heading] + possible_options
 
     # Pivot the data so that 'header1' fields are always first column
@@ -979,9 +1227,16 @@ def user_settings(request):
     else:
         form = UserSettingsForm(s.settings)
 
+    user = User.objects.get(id = request.user.id)
+    show_password_change_link = 0
+    # we don't want non-local users to see the 'change password' link.
+    if helpdesk_settings.HELPDESK_SHOW_CHANGE_PASSWORD and user.has_usable_password():
+        show_password_change_link = 1
+
     return render_to_response('helpdesk/user_settings.html',
         RequestContext(request, {
             'form': form,
+            'show_password_change_link': show_password_change_link,
         }))
 user_settings = staff_member_required(user_settings)
 
@@ -1090,4 +1345,94 @@ def ticket_dependency_del(request, ticket_id, dependency_id):
             'dependency': dependency,
         }))
 ticket_dependency_del = staff_member_required(ticket_dependency_del)
+
+def attachment_del(request, ticket_id, attachment_id):
+    ticket = get_object_or_404(Ticket, id=ticket_id)
+    attachment = get_object_or_404(Attachment, id=attachment_id)
+    attachment.delete()
+    return HttpResponseRedirect(reverse('helpdesk_view', args=[ticket_id]))
+attachment_del = staff_member_required(attachment_del)
+
+def calc_average_nbr_days_until_ticket_resolved(Tickets):
+    nbr_closed_tickets = len(Tickets)
+    days_per_ticket = 0
+    days_each_ticket = list()
+
+    for ticket in Tickets:
+        time_ticket_open = ticket.modified - ticket.created
+        days_this_ticket = time_ticket_open.days
+        days_per_ticket += days_this_ticket
+        days_each_ticket.append(days_this_ticket)
+
+    if nbr_closed_tickets > 0:
+        mean_per_ticket = days_per_ticket / nbr_closed_tickets
+    else:
+        mean_per_ticket = 0
+
+    return mean_per_ticket
+
+def calc_basic_ticket_stats(Ticket):
+    # all not closed tickets (open, reopened, resolved,) - independent of user
+    all_open_tickets = Ticket.objects.exclude(status = Ticket.CLOSED_STATUS)
+    today = datetime.today()
+
+    date_30 = date_rel_to_today(today, 30)
+    date_60 = date_rel_to_today(today, 60)
+    date_30_str = date_30.strftime('%Y-%m-%d')
+    date_60_str = date_60.strftime('%Y-%m-%d')
+
+    # > 0 & <= 30 
+    ota_le_30 = all_open_tickets.filter(created__gte = date_30_str)
+    N_ota_le_30 = len(ota_le_30)
+
+    # >= 30 & <= 60 
+    ota_le_60_ge_30 = all_open_tickets.filter(created__gte = date_60_str, created__lte = date_30_str)
+    N_ota_le_60_ge_30 = len(ota_le_60_ge_30)
+
+    # >= 60
+    ota_ge_60 = all_open_tickets.filter(created__lte = date_60_str)
+    N_ota_ge_60 = len(ota_ge_60)
+
+    # (O)pen (T)icket (S)tats
+    ots = list()
+    # label, number entries, color, sort_string
+    ots.append(['< 30 days', N_ota_le_30, get_color_for_nbr_days(N_ota_le_30), sort_string(date_30_str, ''), ])
+    ots.append(['30 - 60 days', N_ota_le_60_ge_30, get_color_for_nbr_days(N_ota_le_60_ge_30), sort_string(date_60_str, date_30_str), ])
+    ots.append(['> 60 days', N_ota_ge_60, get_color_for_nbr_days(N_ota_ge_60), sort_string('', date_60_str), ])
+
+    # all closed tickets - independent of user.
+    all_closed_tickets = Ticket.objects.filter(status = Ticket.CLOSED_STATUS)
+    average_nbr_days_until_ticket_closed = calc_average_nbr_days_until_ticket_resolved(all_closed_tickets)
+    # all closed tickets that were opened in the last 60 days.
+    all_closed_last_60_days = all_closed_tickets.filter(created__gte = date_60_str)
+    average_nbr_days_until_ticket_closed_last_60_days = calc_average_nbr_days_until_ticket_resolved(all_closed_last_60_days)
+
+    # put together basic stats
+    basic_ticket_stats = {  'average_nbr_days_until_ticket_closed': average_nbr_days_until_ticket_closed, 
+                            'average_nbr_days_until_ticket_closed_last_60_days': average_nbr_days_until_ticket_closed_last_60_days,
+                            'open_ticket_stats': ots, }
+
+    return basic_ticket_stats
+
+def get_color_for_nbr_days(nbr_days):
+    ''' '''
+    if nbr_days < 5:
+        color_string = 'green'
+    elif nbr_days >= 5 and nbr_days < 10:
+        color_string = 'orange'
+    else: # more than 10 days
+        color_string = 'red'
+
+    return color_string
+
+def days_since_created(today, ticket):
+    return (today - ticket.created).days
+
+def date_rel_to_today(today, offset):
+    return today - timedelta(days = offset)
+
+def sort_string(begin, end):
+    return 'sort=created&date_from=%s&date_to=%s&status=%s&status=%s&status=%s' %(begin, end, Ticket.OPEN_STATUS, Ticket.REOPENED_STATUS, Ticket.RESOLVED_STATUS)
+
+
 

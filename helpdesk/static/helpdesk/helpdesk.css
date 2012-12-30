@@ -18,10 +18,15 @@ table {
 
 #header h1 {
     float: left;
+    margin-top: 20px;
+    padding-top: 20px;
+    line-height: 24px;
 }
 
 #header ul {
     float: right;
+    margin-top: 40px;
+    line-height: 24px;
 }
 #header li {
     display: inline;
@@ -43,7 +48,7 @@ table {
     border: solid #444 1px;
     background-color: #fff;
     color: #ccc;
-    padding: 2px 3px;
+    padding: 0px 3px;
     margin: 0px 2px;
     font-size: 10pt;
     line-height: 12pt;
@@ -149,6 +154,11 @@ td {
     font-size: 10pt;
 }
 
+td.report {
+    font-size: 10pt;
+    text-align: center;
+}
+
 .hover {
     background-color: #bcd4ec;
 }
@@ -159,14 +169,27 @@ div.followup {
     padding:0 0 2px;
 }
 
-div.followup .title {
+div.followup_mod {
+    width: auto;
+    border: solid #666 1px;
+    padding: 5px;
+    margin: 0px 0px 10px;
+}
+
+div.followup .title, div.followup_mod .title {
     font-weight: bold;
     font-size: 10pt;
 }
 
-div.followup .title span {
+div.followup .title span, div.followup_mod .title span {
     color: #aaa;
     font-weight: normal;
+}
+
+div.followup_mod small {
+    float: right;
+    font-weight: bold;
+    font-style: italic;
 }
 
 span.private {
@@ -267,3 +290,34 @@ span.priority5 {
 a.followup-edit {
     float:right;
 }
+
+/* tooltips for link hover */
+a.tooltip, a.tooltip:link, a.tooltip:visited, a.tooltip:active  {
+  position: relative;
+  text-decoration: none;
+  font-style: italic;
+}
+
+a.tooltip:hover {
+  background: transparent;
+}
+
+a.tooltip span {
+  display: none;
+  text-decoration: none;
+}
+
+a.tooltip:hover span {
+  display: block;
+  position: absolute;
+  top: 25px;
+  left: 0;
+  width: 250px;
+  z-index: 10;
+  color: #000000;
+  border:1px solid #000000;
+  background: #FFFFCC;
+  font: 12px Verdana, sans-serif;
+  text-align: left;
+}
+

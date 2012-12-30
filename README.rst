@@ -12,7 +12,7 @@ contributors reaching far beyond Jutda.
 
 Complete documentation is available in the docs/ directory, or online at http://django-helpdesk.readthedocs.org/.
 
-You can see a demo installation at http://demo.jutdahelpdesk.com
+You can see a demo installation at http://django-helpdesk-demo.herokuapp.com/
 
 Changes from rossp's original
 =============================
@@ -20,20 +20,21 @@ Changes from rossp's original
 * Simplified lead form submission added
 
 Licensing
-=========
+---------
 
 See the file 'LICENSE' for licensing terms. Note that django-helpdesk is 
 distributed with 3rd party products which have their own licenses. See 
 LICENSE.3RDPARTY for license terms for included packages.
 
 Dependencies (pre-flight checklist)
-===================================
+-----------------------------------
 
-1. Python 2.4+ 
-2. Django (1.2 or newer)
+1. Python 2.5+ 
+2. Django (1.3 or newer)
 3. South for database migrations (highly recommended, but not required). Download from http://south.aeracode.org/
 4. An existing WORKING Django project with database etc. If you
    cannot log into the Admin, you won't get this product working.
+5. You must have ``django.contrib.markup`` in your ``settings.INSTALLED_APPS`` setting.
 
 **NOTE REGARDING SQLITE AND SEARCHING:**
 If you use sqlite as your database, the search function will not work as
@@ -58,8 +59,22 @@ If you do NOT do this step, and you only want to use English-language templates,
 you can continue however you will receive a warning when running the 'migrate'
 commands.
 
+Tagging
+-------
+
+If you use Django-tagging and want to tag your Helpdesk tickets, ensure that 
+django-tagging is installed and you have done a ``syncdb`` **before** you 
+add ``helpdesk`` to your ``INSTALLED_APPS``.
+
+Fresh Django Installations
+--------------------------
+
+If you're on a brand new Django installation, make sure you do a ``syncdb``
+**before** adding ``helpdesk`` to your ``INSTALLED_APPS``. This will avoid 
+errors with trying to create User settings.
+
 Upgrading from previous versions
-================================
+--------------------------------
 
 We highly recommend that you use South (available 
 from http://south.aeracode.org/) to assist with management of database schema
@@ -73,7 +88,7 @@ migration::
 
 If you are upgrading from a previous version of django-helpdesk that DID use
 South, simply download an up to date version of the code base (eg by using 
-`git pull`) then migrate the database::
+`git pull` or `pip install --upgrade django-helpdesk`) then migrate the database::
 
     python manage.py migrate helpdesk --db-dry-run # DB untouched
     python manage.py migrate helpdesk 
@@ -83,54 +98,22 @@ ensure the latest changes are in use.
 
 You can continue to the 'Initial Configuration' area, if needed.
 
-Django 1.2.x and latest version of django-helpdesk
-==================================================
-
-If you are running Django 1.2.x then you will need to install django-staticfiles
-(http://pypi.python.org/pypi/django-staticfiles/) and add the following to your 
-existing `settings.py` and `urls.py` files.
-
-settings.py::
-
-    MEDIA_ROOT = '/var/www/media/'
-    MEDIA_URL = '/media/'
-    STATIC_ROOT = '/var/www/static/'
-    STATIC_URL = '/static/'
-
-    INSTALLED_APPS = (
-        # Other installed applications here, including 'helpdesk'
-        'staticfiles',             
-    )
-
-    TEMPLATE_CONTEXT_PROCESSORS = (
-        # Other context processors listed here
-        'staticfiles.context_processors.static',
-    )
-
-urls.py::
-
-    from staticfiles.urls import staticfiles_urlpatterns
-    urlpatterns += staticfiles_urlpatterns()
-
-Once those changes are made, run the following commands to take a copy of the static files::
-
-    $ cd /var/www
-    $ mkdir static
-    $ cd static
-    $ ln -sf /path/to/helpdesk/static/helpdesk/ helpdesk
-
 Installation
-============
+------------
 
 ``pip install django-helpdesk``
 
 For further installation information see docs/install.html and docs/configuration.html
 
-Internationalisation
-====================
+Contributing
+------------
 
 If you want to help translate django-helpdesk into languages other than English, we encourage you to make use of our Transifex project.
 
 http://www.transifex.net/projects/p/django-helpdesk/resource/core/
 
 Feel free to request access to contribute your translations.
+
+Pull requests for all other changes are welcome. We're currently trying to add test cases wherever possible, so please continue to include tests with pull requests.
+
+.. image:: https://secure.travis-ci.org/rossp/django-helpdesk.png?branch=master
