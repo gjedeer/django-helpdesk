@@ -26,6 +26,11 @@ from django.utils.translation import ugettext as _
 from django.utils.html import escape
 from django import forms
 
+try:
+    from django.utils import timezone
+except ImportError:
+    from datetime import datetime as timezone
+
 from helpdesk.forms import TicketForm, UserSettingsForm, EmailIgnoreForm, EditTicketForm, TicketCCForm, EditFollowUpForm, TicketDependencyForm
 from helpdesk.lib import send_templated_mail, query_to_dict, apply_query, safe_template_context
 from helpdesk.models import Ticket, Queue, FollowUp, TicketChange, PreSetReply, Attachment, SavedSearch, IgnoreEmail, TicketCC, TicketDependency
@@ -352,7 +357,7 @@ def update_ticket(request, ticket_id, public=False):
         if ticket.due_date:
             due_date = ticket.due_date
         else:
-            due_date = datetime.now()
+            due_date = timezone.now()
         due_date = due_date.replace(due_date_year, due_date_month, due_date_day)
     tags = request.POST.get('tags', '')
     time_spent = request.POST.get('time_spent', 0)
@@ -383,7 +388,7 @@ def update_ticket(request, ticket_id, public=False):
     if owner is -1 and ticket.assigned_to:
         owner = ticket.assigned_to.id
 
-    f = FollowUp(ticket=ticket, date=datetime.now(), comment=comment)
+    f = FollowUp(ticket=ticket, date=timezone.now(), comment=comment)
 
     if request.user.is_staff or helpdesk_settings.HELPDESK_ALLOW_NON_STAFF_TICKET_UPDATE:
         f.user = request.user
@@ -427,14 +432,14 @@ def update_ticket(request, ticket_id, public=False):
     if request.FILES:
         import mimetypes, os
         for file in request.FILES.getlist('attachment'):
-            filename = file.name.replace(' ', '_')
+            filename = file.name.encode('ascii', 'ignore')
             a = Attachment(
                 followup=f,
                 filename=filename,
                 mime_type=mimetypes.guess_type(filename)[0] or 'application/octet-stream',
                 size=file.size,
                 )
-            a.file.save(file.name, file, save=False)
+            a.file.save(filename, file, save=False)
             a.save()
 
             if file.size < getattr(settings, 'MAX_EMAIL_ATTACHMENT_SIZE', 512000):
@@ -498,29 +503,35 @@ def update_ticket(request, ticket_id, public=False):
         comment=f.comment,
         )
 
-    if ticket.submitter_email and public and (f.comment or (f.new_status in (Ticket.RESOLVED_STATUS, Ticket.CLOSED_STATUS))):
+    if public and (f.comment or (f.new_status in (Ticket.RESOLVED_STATUS, Ticket.CLOSED_STATUS))):
+        
 
         if f.new_status == Ticket.RESOLVED_STATUS:
-            template = 'resolved_submitter'
+            template = 'resolved_'
         elif f.new_status == Ticket.CLOSED_STATUS:
-            template = 'closed_submitter'
+            template = 'closed_'
         else:
-            template = 'updated_submitter'
+            template = 'updated_'
 
-        send_templated_mail(
-            template,
-            context,
-            recipients=ticket.submitter_email,
-            sender=ticket.queue.from_address,
-            fail_silently=True,
-            files=files,
-            )
-        messages_sent_to.append(ticket.submitter_email)
+        template_suffix = 'submitter'
+
+        if ticket.submitter_email:
+            send_templated_mail(
+                template + template_suffix,
+                context,
+                recipients=ticket.submitter_email,
+                sender=ticket.queue.from_address,
+                fail_silently=True,
+                files=files,
+                )
+            messages_sent_to.append(ticket.submitter_email)
+
+        template_suffix = 'cc'
 
         for cc in ticket.ticketcc_set.all():
             if cc.email_address not in messages_sent_to:
                 send_templated_mail(
-                    template,
+                    template + template_suffix,
                     context,
                     recipients=cc.email_address,
                     sender=ticket.queue.from_address,
@@ -574,7 +585,7 @@ def update_ticket(request, ticket_id, public=False):
     ticket.save()
 
     # auto subscribe user if enabled
-    if helpdesk_settings.HELPDESK_AUTO_SUBSCRIBE_ON_TICKET_RESPONSE:
+    if helpdesk_settings.HELPDESK_AUTO_SUBSCRIBE_ON_TICKET_RESPONSE and request.user.is_authenticated():
         ticketcc_string, SHOW_SUBSCRIBE = return_ticketccstring_and_show_subscribe(request.user, ticket)
         if SHOW_SUBSCRIBE:
             subscribe_staff_member_to_ticket(ticket, request.user)
@@ -609,22 +620,22 @@ def mass_update(request):
         if action == 'assign' and t.assigned_to != user:
             t.assigned_to = user
             t.save()
-            f = FollowUp(ticket=t, date=datetime.now(), title=_('Assigned to %(username)s in bulk update' % {'username': user.username}), public=True, user=request.user)
+            f = FollowUp(ticket=t, date=timezone.now(), title=_('Assigned to %(username)s in bulk update' % {'username': user.username}), public=True, user=request.user)
             f.save()
         elif action == 'unassign' and t.assigned_to is not None:
             t.assigned_to = None
             t.save()
-            f = FollowUp(ticket=t, date=datetime.now(), title=_('Unassigned in bulk update'), public=True, user=request.user)
+            f = FollowUp(ticket=t, date=timezone.now(), title=_('Unassigned in bulk update'), public=True, user=request.user)
             f.save()
         elif action == 'close' and t.status != Ticket.CLOSED_STATUS:
             t.status = Ticket.CLOSED_STATUS
             t.save()
-            f = FollowUp(ticket=t, date=datetime.now(), title=_('Closed in bulk update'), public=False, user=request.user, new_status=Ticket.CLOSED_STATUS)
+            f = FollowUp(ticket=t, date=timezone.now(), title=_('Closed in bulk update'), public=False, user=request.user, new_status=Ticket.CLOSED_STATUS)
             f.save()
         elif action == 'close_public' and t.status != Ticket.CLOSED_STATUS:
             t.status = Ticket.CLOSED_STATUS
             t.save()
-            f = FollowUp(ticket=t, date=datetime.now(), title=_('Closed in bulk update'), public=True, user=request.user, new_status=Ticket.CLOSED_STATUS)
+            f = FollowUp(ticket=t, date=timezone.now(), title=_('Closed in bulk update'), public=True, user=request.user, new_status=Ticket.CLOSED_STATUS)
             f.save()
             # Send email to Submitter, Owner, Queue CC
             context = safe_template_context(t)
@@ -966,7 +977,7 @@ def hold_ticket(request, ticket_id, unhold=False):
         ticket = ticket,
         user = request.user,
         title = title,
-        date = datetime.now(),
+        date = timezone.now(),
         public = True,
     )
     f.save()

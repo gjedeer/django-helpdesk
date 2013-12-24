@@ -7,14 +7,18 @@ forms.py - Definitions of newforms-based forms for creating and maintaining
            tickets.
 """
 
-from datetime import datetime
 from StringIO import StringIO
 
 from django import forms
 from django.forms import extras
+from django.core.files.storage import default_storage
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext as _
+try:
+    from django.utils import timezone
+except ImportError:
+    from datetime import datetime as timezone
 
 from helpdesk.lib import send_templated_mail, safe_template_context
 from helpdesk.models import Ticket, Queue, FollowUp, Attachment, IgnoreEmail, TicketCC, CustomField, TicketCustomFieldValue, TicketDependency
@@ -243,7 +247,7 @@ class TicketForm(forms.Form):
 
         t = Ticket( title = self.cleaned_data['title'],
                     submitter_email = self.cleaned_data['submitter_email'],
-                    created = datetime.now(),
+                    created = timezone.now(),
                     status = Ticket.OPEN_STATUS,
                     queue = q,
                     description = self.cleaned_data['body'],
@@ -273,7 +277,7 @@ class TicketForm(forms.Form):
 
         f = FollowUp(   ticket = t,
                         title = _('Ticket Opened'),
-                        date = datetime.now(),
+                        date = timezone.now(),
                         public = True,
                         comment = self.cleaned_data['body'],
                         user = user,
@@ -302,7 +306,10 @@ class TicketForm(forms.Form):
             if file.size < getattr(settings, 'MAX_EMAIL_ATTACHMENT_SIZE', 512000):
                 # Only files smaller than 512kb (or as defined in 
                 # settings.MAX_EMAIL_ATTACHMENT_SIZE) are sent via email.
-                files.append(a.file.path)
+                try:
+                    files.append(a.file.path)
+                except NotImplementedError:
+                    pass
 
         context = safe_template_context(t)
         context['comment'] = f.comment
@@ -462,7 +469,7 @@ class PublicTicketForm(forms.Form):
         t = Ticket(
             title = self.cleaned_data['title'],
             submitter_email = self.cleaned_data['submitter_email'],
-            created = datetime.now(),
+            created = timezone.now(),
             status = Ticket.OPEN_STATUS,
             queue = q,
             description = self.cleaned_data['body'],
@@ -484,7 +491,7 @@ class PublicTicketForm(forms.Form):
         f = FollowUp(
             ticket = t,
             title = _('Ticket Opened Via Web'),
-            date = datetime.now(),
+            date = timezone.now(),
             public = True,
             comment = self.cleaned_data['body'],
             )

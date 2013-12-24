@@ -7,12 +7,16 @@ models.py - Model (and hence database) definitions. This is the core of the
             helpdesk structure.
 """
 
-from datetime import datetime
-
 from django.contrib.auth.models import User
 from django.db import models
 from django.conf import settings
 from django.utils.translation import ugettext_lazy as _, ugettext
+
+try:
+    from django.utils import timezone
+except ImportError:
+    from datetime import datetime as timezone
+
 from helpdesk.settings import HAS_TAG_SUPPORT
 
 if HAS_TAG_SUPPORT:
@@ -385,7 +389,9 @@ class Ticket(models.Model):
         """
         held_msg = ''
         if self.on_hold: held_msg = _(' - On Hold')
-        return u'%s%s' % (self.get_status_display(), held_msg)
+        dep_msg = ''
+        if self.can_be_resolved == False: dep_msg = _(' - Open dependencies')
+        return u'%s%s%s' % (self.get_status_display(), held_msg, dep_msg)
     get_status = property(_get_status)
 
     def _get_ticket_url(self):
@@ -457,12 +463,12 @@ class Ticket(models.Model):
     def save(self, *args, **kwargs):
         if not self.id:
             # This is a new ticket as no ID yet exists.
-            self.created = datetime.now()
+            self.created = timezone.now()
 
         if not self.priority:
             self.priority = 3
 
-        self.modified = datetime.now()
+        self.modified = timezone.now()
 
         super(Ticket, self).save(*args, **kwargs)
 
@@ -495,7 +501,7 @@ class FollowUp(models.Model):
 
     date = models.DateTimeField(
         _('Date'), 
-        default = datetime.now()
+        default = timezone.now()
         )
 
     title = models.CharField(
@@ -553,7 +559,7 @@ class FollowUp(models.Model):
 
     def save(self, *args, **kwargs):
         t = self.ticket
-        t.modified = datetime.now()
+        t.modified = timezone.now()
         t.save()
         super(FollowUp, self).save(*args, **kwargs)
 
@@ -610,8 +616,9 @@ def attachment_path(instance, filename):
     os.umask(0)
     path = 'helpdesk/attachments/%s/%s' % (instance.followup.ticket.ticket_for_url, instance.followup.id )
     att_path = os.path.join(settings.MEDIA_ROOT, path)
-    if not os.path.exists(att_path):
-        os.makedirs(att_path, 0777)
+    if settings.DEFAULT_FILE_STORAGE == "django.core.files.storage.FileSystemStorage":
+        if not os.path.exists(att_path):
+            os.makedirs(att_path, 0777)
     return os.path.join(path, filename)
 
 
@@ -869,7 +876,7 @@ class KBItem(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.last_updated:
-            self.last_updated = datetime.now()
+            self.last_updated = timezone.now()
         return super(KBItem, self).save(*args, **kwargs)
 
     def _score(self):
@@ -1050,7 +1057,7 @@ class IgnoreEmail(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.date:
-            self.date = datetime.now()
+            self.date = timezone.now()
         return super(IgnoreEmail, self).save(*args, **kwargs)
 
     def test(self, email):

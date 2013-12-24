@@ -11,8 +11,6 @@ The API documentation can be accessed by visiting http://helpdesk/api/help/
 through templates/helpdesk/help_api.html.
 """
 
-from datetime import datetime
-
 from django import forms
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
@@ -21,6 +19,11 @@ from django.shortcuts import render_to_response
 from django.template import loader, Context
 from django.utils import simplejson
 from django.views.decorators.csrf import csrf_exempt
+
+try:
+    from django.utils import timezone
+except ImportError:
+    from datetime import datetime as timezone
 
 from helpdesk.forms import TicketForm
 from helpdesk.lib import send_templated_mail, safe_template_context
@@ -182,7 +185,7 @@ class API:
 
         f = FollowUp(
             ticket=ticket,
-            date=datetime.now(),
+            date=timezone.now(),
             comment=message,
             user=self.request.user,
             title='Comment Added',
@@ -257,7 +260,7 @@ class API:
 
         f = FollowUp(
             ticket=ticket,
-            date=datetime.now(),
+            date=timezone.now(),
             comment=resolution,
             user=self.request.user,
             title='Resolved',
