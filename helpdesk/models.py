@@ -405,7 +405,7 @@ class Ticket(models.Model):
             site = Site.objects.get_current()
         except:
             site = Site(domain='configure-django-sites.com')
-        return u"http://%s%s?ticket=%s&email=%s" % (
+        return u"https://%s%s?ticket=%s&email=%s" % (
             site.domain,
             reverse('helpdesk_public_view'),
             self.ticket_for_url,
@@ -424,7 +424,7 @@ class Ticket(models.Model):
             site = Site.objects.get_current()
         except:
             site = Site(domain='configure-django-sites.com')
-        return u"http://%s%s" % (
+        return u"https://%s%s" % (
             site.domain,
             reverse('helpdesk_view',
             args=[self.id])
