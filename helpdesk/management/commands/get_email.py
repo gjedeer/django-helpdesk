@@ -28,6 +28,7 @@ from django.core.management.base import BaseCommand
 from django.db.models import Q
 from django.utils.translation import ugettext as _
 from helpdesk import settings
+from helpdesk import signals # gdrmod
 
 try:
     from django.utils import timezone
@@ -251,6 +252,7 @@ def ticket_from_message(message, queue, quiet):
             priority=priority,
         )
         t.save()
+        signals.ticket_created.send(sender='email', ticket=t)
         new = True
         update = ''
 

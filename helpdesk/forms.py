@@ -250,6 +250,7 @@ class TicketForm(forms.Form):
             except User.DoesNotExist:
                 t.assigned_to = None
         t.save()
+        signals.ticket_created.send(sender=self, ticket=t)
         
         for field, value in self.cleaned_data.items():
             if field.startswith('custom_'):
@@ -463,6 +464,7 @@ class PublicTicketForm(forms.Form):
             )
 
         t.save()
+        signals.ticket_created.send(sender=self, ticket=t)
 
         for field, value in self.cleaned_data.items():
             if field.startswith('custom_'):
