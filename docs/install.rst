@@ -29,7 +29,7 @@ Download, extract, and drop ``helpdesk`` into your ``PYTHONPATH``
 Adding To Your Django Project
 -----------------------------
 
-1. Edit your ``settings.py`` file and add ``helpdesk`` to the ``INSTALLED_APPS`` setting. You also need ``django.contrib.admin`` in ``INSTALLED_APPS`` if you haven't already added it. eg::
+1. Edit your ``settings.py`` file and add ``helpdesk`` to the ``INSTALLED_APPS`` setting. You also need ``django.contrib.admin`` and ``django.contrib.markup`` in ``INSTALLED_APPS`` if you haven't already added it. eg::
     
     INSTALLED_APPS = (
         'django.contrib.auth',
@@ -37,7 +37,7 @@ Adding To Your Django Project
         'django.contrib.sessions',
         'django.contrib.sites',
         'django.contrib.admin', # Required for helpdesk admin/maintenance
-        'django.contrib.markup', # Required for text display
+        'django.contrib.markup', # Required for helpdesk text display
         'south', # Highly recommended to make database migrations simpler.
         'helpdesk', # This is new!
     )
@@ -56,17 +56,13 @@ Adding To Your Django Project
 
      ./manage.py syncdb
 
-   If you're wise enough to use South, the first migration will need to be a fake::
-
-     ./manage.py migrate helpdesk 0001 --fake
-
-   After the initial migration, all others are done in the usual way::
+   Then migrate using South
 
      ./manage.py migrate helpdesk
 
-4. [If you're not using django.contrib.staticfiles] Inside your ``STATIC_ROOT`` folder, create a new folder called ``helpdesk`` and copy the contents of ``helpdesk/static`` into it. Alternatively, create a symlink::
+4. Include your static files in your public web path::
 
-      ln -s /path/to/helpdesk/static/helpdesk /path/to/static/helpdesk
+      python manage.py collectstatic
 
 5. Inside your ``MEDIA_ROOT`` folder, inside the ``helpdesk`` folder, is a folder called ``attachments``. Ensure your web server software can write to this folder - something like this should do the trick::
 

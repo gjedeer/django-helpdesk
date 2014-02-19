@@ -7,16 +7,19 @@ models.py - Model (and hence database) definitions. This is the core of the
             helpdesk structure.
 """
 
-from datetime import datetime
-
-from django.contrib.auth.models import User
+try:
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+except ImportError:
+    from django.contrib.auth.models import User
 from django.db import models
 from django.conf import settings
 from django.utils.translation import ugettext_lazy as _, ugettext
-from helpdesk.settings import HAS_TAG_SUPPORT
 
-if HAS_TAG_SUPPORT:
-    from tagging.fields import TagField
+try:
+    from django.utils import timezone
+except ImportError:
+    from datetime import datetime as timezone
 
 class Queue(models.Model):
     """
@@ -197,7 +200,7 @@ class Queue(models.Model):
             return u'%s <%s>' % (self.title, self.email_address)
     from_address = property(_from_address)
 
-    def save(self, force_insert=False, force_update=False):
+    def save(self, *args, **kwargs):
         if self.email_box_type == 'imap' and not self.email_box_imap_folder:
             self.email_box_imap_folder = 'INBOX'
 
@@ -210,7 +213,7 @@ class Queue(models.Model):
                 self.email_box_port = 995
             elif self.email_box_type == 'pop3' and not self.email_box_ssl:
                 self.email_box_port = 110
-        super(Queue, self).save(force_insert, force_update)
+        super(Queue, self).save(*args, **kwargs)
 
 
 class Ticket(models.Model):
@@ -326,6 +329,12 @@ class Ticket(models.Model):
         help_text=_('1 = Highest Priority, 5 = Low Priority'),
         )
 
+    due_date = models.DateTimeField(
+        _('Due on'),
+        blank=True,
+        null=True,
+        )
+
     last_escalation = models.DateTimeField(
         blank=True,
         null=True,
@@ -379,7 +388,9 @@ class Ticket(models.Model):
         """
         held_msg = ''
         if self.on_hold: held_msg = _(' - On Hold')
-        return u'%s%s' % (self.get_status_display(), held_msg)
+        dep_msg = ''
+        if self.can_be_resolved == False: dep_msg = _(' - Open dependencies')
+        return u'%s%s%s' % (self.get_status_display(), held_msg, dep_msg)
     get_status = property(_get_status)
 
     def _get_ticket_url(self):
@@ -389,7 +400,10 @@ class Ticket(models.Model):
         """
         from django.contrib.sites.models import Site
         from django.core.urlresolvers import reverse
-        site = Site.objects.get_current()
+        try:
+            site = Site.objects.get_current()
+        except:
+            site = Site(domain='configure-django-sites.com')
         return u"http://%s%s?ticket=%s&email=%s" % (
             site.domain,
             reverse('helpdesk_public_view'),
@@ -405,7 +419,10 @@ class Ticket(models.Model):
         """
         from django.contrib.sites.models import Site
         from django.core.urlresolvers import reverse
-        site = Site.objects.get_current()
+        try:
+            site = Site.objects.get_current()
+        except:
+            site = Site(domain='configure-django-sites.com')
         return u"http://%s%s" % (
             site.domain,
             reverse('helpdesk_view',
@@ -429,30 +446,28 @@ class Ticket(models.Model):
         return TicketDependency.objects.filter(ticket=self).filter(depends_on__status__in=OPEN_STATUSES).count() == 0
     can_be_resolved = property(_can_be_resolved)
 
-    if HAS_TAG_SUPPORT:
-        tags = TagField(blank=True)
-
     class Meta:
         get_latest_by = "created"
+        ordering = ('id',)
 
     def __unicode__(self):
-        return u'%s' % self.title
+        return u'%s %s' % (self.id, self.title)
 
     def get_absolute_url(self):
         return ('helpdesk_view', (self.id,))
     get_absolute_url = models.permalink(get_absolute_url)
 
-    def save(self, force_insert=False, force_update=False):
+    def save(self, *args, **kwargs):
         if not self.id:
             # This is a new ticket as no ID yet exists.
-            self.created = datetime.now()
+            self.created = timezone.now()
 
         if not self.priority:
             self.priority = 3
 
-        self.modified = datetime.now()
+        self.modified = timezone.now()
 
-        super(Ticket, self).save(force_insert, force_update)
+        super(Ticket, self).save(*args, **kwargs)
 
 
 class FollowUpManager(models.Manager):
@@ -483,7 +498,7 @@ class FollowUp(models.Model):
 
     date = models.DateTimeField(
         _('Date'), 
-        default = datetime.now()
+        default = timezone.now()
         )
 
     title = models.CharField(
@@ -539,11 +554,11 @@ class FollowUp(models.Model):
     def get_absolute_url(self):
         return u"%s#followup%s" % (self.ticket.get_absolute_url(), self.id)
 
-    def save(self, force_insert=False, force_update=False):
+    def save(self, *args, **kwargs):
         t = self.ticket
-        t.modified = datetime.now()
+        t.modified = timezone.now()
         t.save()
-        super(FollowUp, self).save(force_insert, force_update)
+        super(FollowUp, self).save(*args, **kwargs)
 
 
 class TicketChange(models.Model):
@@ -598,8 +613,9 @@ def attachment_path(instance, filename):
     os.umask(0)
     path = 'helpdesk/attachments/%s/%s' % (instance.followup.ticket.ticket_for_url, instance.followup.id )
     att_path = os.path.join(settings.MEDIA_ROOT, path)
-    if not os.path.exists(att_path):
-        os.makedirs(att_path, 0777)
+    if settings.DEFAULT_FILE_STORAGE == "django.core.files.storage.FileSystemStorage":
+        if not os.path.exists(att_path):
+            os.makedirs(att_path, 0777)
     return os.path.join(path, filename)
 
 
@@ -626,7 +642,7 @@ class Attachment(models.Model):
 
     mime_type = models.CharField(
         _('MIME Type'),
-        max_length=30,
+        max_length=255,
         )
 
     size = models.IntegerField(
@@ -855,10 +871,10 @@ class KBItem(models.Model):
         blank=True,
         )
 
-    def save(self, force_insert=False, force_update=False):
+    def save(self, *args, **kwargs):
         if not self.last_updated:
-            self.last_updated = datetime.now()
-        return super(KBItem, self).save(force_insert, force_update)
+            self.last_updated = timezone.now()
+        return super(KBItem, self).save(*args, **kwargs)
 
     def _score(self):
         if self.votes > 0:
@@ -1036,10 +1052,10 @@ class IgnoreEmail(models.Model):
     def __unicode__(self):
         return u'%s' % self.name
 
-    def save(self):
+    def save(self, *args, **kwargs):
         if not self.date:
-            self.date = datetime.now()
-        return super(IgnoreEmail, self).save()
+            self.date = timezone.now()
+        return super(IgnoreEmail, self).save(*args, **kwargs)
 
     def test(self, email):
         """
@@ -1187,6 +1203,11 @@ class CustomField(models.Model):
         blank=True,
         null=True,
         )
+        
+    empty_selection_list = models.BooleanField(
+        _('Add empty first choice to List?'),
+        help_text=_('Only for List: adds an empty first entry to the choices list, which enforces that the user makes an active choice.'),
+        )        
 
     list_values = models.TextField(
         _('List Values'),
