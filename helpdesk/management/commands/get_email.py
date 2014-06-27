@@ -15,6 +15,7 @@ import imaplib
 import mimetypes
 import poplib
 import re
+import os.path
 
 from datetime import timedelta
 from email.header import decode_header
@@ -281,6 +282,18 @@ def ticket_from_message(message, queue, quiet):
         if file['content']:
             filename = file['filename'].encode('ascii', 'replace').replace(' ', '_')
             filename = re.sub('[^a-zA-Z0-9._-]+', '', filename)
+            if len(filename) > 29:
+                basename, extension = os.path.splitext(filename)
+                if len(extension) > 10:
+                    extension = extension[:10]
+
+                basename_len = 29 - len(extension)
+                basename = basename[:basename_len]
+                filename = basename + extension
+
+            print filename
+            print len(filename)
+            print file['type']
             a = Attachment(
                 followup=f,
                 filename=filename,
