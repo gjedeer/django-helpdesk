@@ -23,6 +23,7 @@ except ImportError:
 from helpdesk.lib import send_templated_mail, safe_template_context
 from helpdesk.models import Ticket, Queue, FollowUp, Attachment, IgnoreEmail, TicketCC, CustomField, TicketCustomFieldValue, TicketDependency
 from helpdesk import settings as helpdesk_settings
+import signals
 
 class EditTicketForm(forms.ModelForm):
     class Meta:
