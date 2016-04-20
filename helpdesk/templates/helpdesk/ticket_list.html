@@ -1,13 +1,14 @@
-{% extends "helpdesk/base.html" %}{% load i18n %}{% load url from future %}
+{% extends "helpdesk/base.html" %}
+{% load i18n humanize %}
+{% load static from staticfiles %}
 {% block helpdesk_title %}{% trans "Tickets" %}{% endblock %}
 {% block helpdesk_head %}
 
-<script type='text/javascript' language='javascript' src='{{ STATIC_URL }}helpdesk/filter.js'></script>
-<script type='text/javascript' language='javascript' src='{{ STATIC_URL }}helpdesk/hover.js'></script>
+<script type='text/javascript' language='javascript' src='{% static "helpdesk/filter.js" %}'></script>
 
 <script type='text/javascript' language='javascript'>
 $(document).ready(function() {
-    
+
     // Enable Tabs
     $("#searchtabs").tabs({
         collapsible:true
@@ -107,7 +108,7 @@ $(document).ready(function() {
     <select id='id_owners' name='assigned_to' multiple='selected' size='5'>
         {% for u in user_choices %}
         <option value='{{ u.id }}'{% if u.id|in_list:query_params.filtering.assigned_to__id__in %} selected='selected'{% endif %}>
-            {{ u.username }}{% ifequal u user %} {% trans "(ME)" %}{% endifequal %}
+            {{ u.get_username }}{% ifequal u user %} {% trans "(ME)" %}{% endifequal %}
         </option>
         {% endfor %}
     </select>
@@ -126,7 +127,7 @@ $(document).ready(function() {
     <p class='filterHelp'>{% trans "Ctrl-click to select multiple options" %}</p>
     <input type='button' class='filterBuilderRemove' value='-' />
     </div>
-    
+
     <div class='thumbnail filterBox{% if query_params.filtering.created__gte or query_params.filtering.created__lte %} filterBoxShow{% endif %}' id='filterBoxDates'>
         <label for='id_date_from'>{% trans "Date (From)" %}</label><input type='text' name='date_from' value='{{ query_params.filtering.created__gte }}' id='id_date_from' />
         <label for='id_date_to'>{% trans "Date (To)" %}</label><input type='text' name='date_to' value='{{ query_params.filtering.created__lte }}' id='id_date_to' />
@@ -152,7 +153,7 @@ $(document).ready(function() {
     </div>
     </div>
 
-    
+
     {% if not from_saved_query %}
     <div class='panel panel-default' id='tabsave'>
     <div class="panel-heading">
@@ -200,7 +201,7 @@ $(document).ready(function() {
     <form method='get' action='{% url 'helpdesk_list' %}'>
     <p><label for='id_query_selector'>{% trans "Query" %}</label> <select name='saved_query' id='id_query_selector'>
         {% for q in user_saved_queries %}
-        <option value='{{ q.id }}'>{{ q.title }}{% if q.shared %} (Shared{% ifnotequal user q.user %} by {{ q.user.username }}{% endifnotequal %}){% endif %}</option>
+        <option value='{{ q.id }}'>{{ q.title }}{% if q.shared %} (Shared{% ifnotequal user q.user %} by {{ q.user.get_username }}{% endifnotequal %}){% endif %}</option>
         {% endfor %}
     </select></p>
     <input class="btn btn-primary" type='submit' value='{% trans "Run Query" %}'>
@@ -218,26 +219,26 @@ $(document).ready(function() {
 
 {{ search_message|safe }}
 <form method='post' action='{% url 'helpdesk_mass_update' %}' id="ticket_mass_update">
-<table class="table table-hover table-bordered">
+<table class="table table-hover table-bordered table-striped">
+<caption>{% trans "Tickets" %}</caption>
 <thead>
-<tr class='row_tablehead'><td colspan='9'>{% trans "Tickets" %}</td></tr>
-<tr class='row_columnheads'><th>#</th><th>&nbsp;</th><th>{% trans "Pr" %}</th><th>{% trans "Title" %}</th><th>{% trans "Queue" %}</th><th>{% trans "Status" %}</th><th>{% trans "Created" %}</th><th>{% trans "Owner" %}</th></tr>
+<tr><th>#</th><th>&nbsp;</th><th>{% trans "Pr" %}</th><th>{% trans "Title" %}</th><th>{% trans "Queue" %}</th><th>{% trans "Status" %}</th><th>{% trans "Created" %}</th><th>{% trans "Owner" %}</th></tr>
 </thead>
 <tbody>
-{% if tickets %}{% for ticket in tickets.object_list %}
-<tr class='row_{% cycle odd,even %} row_hover'>
+{% for ticket in tickets.object_list %}
+<tr class="{{ ticket.get_priority_css_class }}">
 <th><a href='{{ ticket.get_absolute_url }}'>{{ ticket.ticket }}</a></th>
 <td><input type='checkbox' name='ticket_id' value='{{ ticket.id }}' class='ticket_multi_select' /></td>
-<td>{{ ticket.get_priority_span }}</td>
+<td>{{ ticket.priority }}</td>
 <th><a href='{{ ticket.get_absolute_url }}'>{{ ticket.title }}</a></th>
 <td>{{ ticket.queue }}</td>
 <td>{{ ticket.get_status }}</td>
-<td><span title='{{ ticket.created|date:"r" }}'>{{ ticket.created|timesince }} ago</span></td>
+<td><span title='{{ ticket.created|date:"r" }}'>{{ ticket.created|naturaltime }}</span></td>
 <td>{{ ticket.get_assigned_to }}</td>
 </tr>
-{% endfor %}{% else %}
-<tr class='row_odd'><td colspan='5'>{% trans "No Tickets Match Your Selection" %}</td></tr>
-{% endif %}
+{% empty %}
+<tr><td colspan='5'>{% trans "No Tickets Match Your Selection" %}</td></tr>
+{% endfor %}
 </tbody>
 </table>
 <div class="pagination">
@@ -258,7 +259,7 @@ $(document).ready(function() {
 
 <p><label>{% trans "Select:" %} </label> <a href='#select_all' id='select_all'>{% trans "All" %}</a> <a href='#select_none' id='select_none'>{% trans "None" %}</a> <a href='#select_inverse' id='select_inverse'>{% trans "Inverse" %}</a></p>
 
-<p><label for='id_mass_action'>{% trans "With Selected Tickets:" %}</label> <select name='action' id='id_mass_action'><option value='take'>{% trans "Take (Assign to me)" %}</option><option value='delete'>{% trans "Delete" %}</option><optgroup label='{% trans "Close" %}'><option value='close'>{% trans "Close (Don't Send E-Mail)" %}</option><option value='close_public'>{% trans "Close (Send E-Mail)" %}</option></optgroup><optgroup label='{% trans "Assign To" %}'><option value='unassign'>{% trans "Nobody (Unassign)" %}</option>{% for u in user_choices %}<option value='assign_{{ u.id }}'>{{ u.username }}</option>{% endfor %}</optgroup></select> <input type='submit' value='Go' /></p>
+<p><label for='id_mass_action'>{% trans "With Selected Tickets:" %}</label> <select name='action' id='id_mass_action'><option value='take'>{% trans "Take (Assign to me)" %}</option><option value='delete'>{% trans "Delete" %}</option><optgroup label='{% trans "Close" %}'><option value='close'>{% trans "Close (Don't Send E-Mail)" %}</option><option value='close_public'>{% trans "Close (Send E-Mail)" %}</option></optgroup><optgroup label='{% trans "Assign To" %}'><option value='unassign'>{% trans "Nobody (Unassign)" %}</option>{% for u in user_choices %}<option value='assign_{{ u.id }}'>{{ u.get_username }}</option>{% endfor %}</optgroup></select> <input type='submit' value='Go' /></p>
 {% csrf_token %}</form>
 {% endblock %}
 </div>

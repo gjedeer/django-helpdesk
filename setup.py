@@ -1,10 +1,12 @@
+from __future__ import print_function
+
 import os
 import sys
 from distutils.util import convert_path
 from fnmatch import fnmatchcase
 from setuptools import setup, find_packages
 
-version = '0.1.11'
+version = '0.1.17'
 
 # Provided as an attribute, so you can append to these instead
 # of replicating them:
@@ -63,9 +65,11 @@ def find_package_data(
                         or fn.lower() == pattern.lower()):
                         bad_name = True
                         if show_ignored:
-                            print >> sys.stderr, (
-                                "Directory %s ignored by pattern %s"
-                                % (fn, pattern))
+                            print(
+                                "Directory %s ignored by pattern %s" % (fn, pattern), 
+                                file=sys.stderr
+                            )
+
                         break
                 if bad_name:
                     continue
@@ -86,15 +90,24 @@ def find_package_data(
                         or fn.lower() == pattern.lower()):
                         bad_name = True
                         if show_ignored:
-                            print >> sys.stderr, (
-                                "File %s ignored by pattern %s"
-                                % (fn, pattern))
+                            print(
+                                "File %s ignored by pattern %s" % (fn, pattern), 
+                                file=sys.stderr
+                                )
                         break
                 if bad_name:
                     continue
                 out.setdefault(package, []).append(prefix+name)
     return out
 
+
+def get_requirements():
+    with open(os.path.join(os.path.dirname(__file__), "requirements.txt")) as f:
+        requirements_list = [req.strip() for req in f.readlines()]
+
+    requirements_list.append("setuptools")
+    requirements_list.append("pytz")
+    return requirements_list
 
 
 LONG_DESCRIPTION = """
@@ -133,6 +146,6 @@ setup(
     package_data=find_package_data("helpdesk", only_in_packages=False),
     include_package_data=True,
     zip_safe=False,
-    install_requires=['setuptools', 'pytz'],
+    install_requires=get_requirements(),
 )
 

@@ -7,7 +7,11 @@ views/feeds.py - A handful of staff-only RSS feeds to provide ticket details
                  to feed readers or similar software.
 """
 
-from django.contrib.auth.models import User
+try:
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+except ImportError:
+    from django.contrib.auth.models import User
 from django.contrib.syndication.views import Feed
 from django.core.urlresolvers import reverse
 from django.db.models import Q
@@ -34,22 +38,22 @@ class OpenTicketsByUser(Feed):
         if obj['queue']:
             return _("Helpdesk: Open Tickets in queue %(queue)s for %(username)s") % {
                 'queue': obj['queue'].title,
-                'username': obj['user'].username,
+                'username': obj['user'].get_username(),
                 }
         else:
             return _("Helpdesk: Open Tickets for %(username)s") % {
-                'username': obj['user'].username,
+                'username': obj['user'].get_username(),
                 }
 
     def description(self, obj):
         if obj['queue']:
             return _("Open and Reopened Tickets in queue %(queue)s for %(username)s") % {
                 'queue': obj['queue'].title,
-                'username': obj['user'].username,
+                'username': obj['user'].get_username(),
                 }
         else:
             return _("Open and Reopened Tickets for %(username)s") % {
-                'username': obj['user'].username,
+                'username': obj['user'].get_username(),
                 }
 
     def link(self, obj):
@@ -86,7 +90,7 @@ class OpenTicketsByUser(Feed):
 
     def item_author_name(self, item):
         if item.assigned_to:
-            return item.assigned_to.username
+            return item.assigned_to.get_username()
         else:
             return _('Unassigned')
 
@@ -112,7 +116,7 @@ class UnassignedTickets(Feed):
 
     def item_author_name(self, item):
         if item.assigned_to:
-            return item.assigned_to.username
+            return item.assigned_to.get_username()
         else:
             return _('Unassigned')
 
@@ -164,7 +168,7 @@ class OpenTicketsByQueue(Feed):
 
     def item_author_name(self, item):
         if item.assigned_to:
-            return item.assigned_to.username
+            return item.assigned_to.get_username()
         else:
             return _('Unassigned')
 

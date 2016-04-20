@@ -7,20 +7,26 @@ models.py - Model (and hence database) definitions. This is the core of the
             helpdesk structure.
 """
 
-try:
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-except ImportError:
-    from django.contrib.auth.models import User
+from __future__ import unicode_literals
+from django.contrib.auth.models import Permission
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import models
+from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils.translation import ugettext_lazy as _, ugettext
+from django import VERSION
+from django.utils.encoding import python_2_unicode_compatible
+
+from helpdesk import settings as helpdesk_settings
 
 try:
     from django.utils import timezone
 except ImportError:
     from datetime import datetime as timezone
 
+
+@python_2_unicode_compatible
 class Queue(models.Model):
     """
     A queue is a collection of tickets into what would generally be business
@@ -38,6 +44,8 @@ class Queue(models.Model):
 
     slug = models.SlugField(
         _('Slug'),
+        max_length=50,
+        unique=True,
         help_text=_('This slug is used when building ticket ID\'s. Once set, '
             'try not to change it or e-mailing may get messy.'),
         )
@@ -167,6 +175,16 @@ class Queue(models.Model):
             'folders. Default: INBOX.'),
         )
 
+    permission_name = models.CharField(
+        _('Django auth permission name'),
+        max_length=50,
+        blank=True,
+        null=True,
+        editable=False,
+        help_text=_('Name used in the django.contrib.auth permission system'),
+        )
+
+
     email_box_interval = models.IntegerField(
         _('E-Mail Check Interval'),
         help_text=_('How often do you wish to check this mailbox? (in Minutes)'),
@@ -182,11 +200,44 @@ class Queue(models.Model):
         # This is updated by management/commands/get_mail.py.
         )
 
-    def __unicode__(self):
-        return u"%s" % self.title
+    socks_proxy_type = models.CharField(
+        _('Socks Proxy Type'),
+        max_length=8,
+        choices=(('socks4', _('SOCKS4')), ('socks5', _('SOCKS5'))),
+        blank=True,
+        null=True,
+        help_text=_('SOCKS4 or SOCKS5 allows you to proxy your connections through a SOCKS server.'),
+    )
+
+    socks_proxy_host = models.GenericIPAddressField(
+        _('Socks Proxy Host'),
+        blank=True,
+        null=True,
+        help_text=_('Socks proxy IP address. Default: 127.0.0.1'),
+    )
+
+    socks_proxy_port = models.IntegerField(
+        _('Socks Proxy Port'),
+        blank=True,
+        null=True,
+        help_text=_('Socks proxy port number. Default: 9150 (default TOR port)'),
+    )
+
+    default_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        related_name='default_owner',
+        blank=True,
+        null=True,
+        verbose_name=_('Default owner'),
+    )
+
+    def __str__(self):
+        return "%s" % self.title
 
     class Meta:
         ordering = ('title',)
+        verbose_name = _('Queue')
+        verbose_name_plural = _('Queues')
 
     def _from_address(self):
         """
@@ -200,9 +251,27 @@ class Queue(models.Model):
             return u'%s <%s>' % (self.title, self.email_address)
     from_address = property(_from_address)
 
+    def prepare_permission_name(self):
+        """Prepare internally the codename for the permission and store it in permission_name.
+        :return: The codename that can be used to create a new Permission object.
+        """
+        # Prepare the permission associated to this Queue
+        basename = "queue_access_%s" % self.slug
+        self.permission_name = "helpdesk.%s" % basename
+        return basename
+
     def save(self, *args, **kwargs):
         if self.email_box_type == 'imap' and not self.email_box_imap_folder:
             self.email_box_imap_folder = 'INBOX'
+
+        if self.socks_proxy_type:
+            if not self.socks_proxy_host:
+                self.socks_proxy_host = '127.0.0.1'
+            if not self.socks_proxy_port:
+                self.socks_proxy_port = 9150
+        else:
+            self.socks_proxy_host = None
+            self.socks_proxy_port = None
 
         if not self.email_box_port:
             if self.email_box_type == 'imap' and self.email_box_ssl:
@@ -213,7 +282,31 @@ class Queue(models.Model):
                 self.email_box_port = 995
             elif self.email_box_type == 'pop3' and not self.email_box_ssl:
                 self.email_box_port = 110
+
+        if not self.id:
+            # Prepare the permission codename and the permission
+            # (even if they are not needed with the current configuration)
+            basename = self.prepare_permission_name()
+
+            Permission.objects.create(
+                name=_("Permission for queue: ") + self.title,
+                content_type=ContentType.objects.get(model="queue"),
+                codename=basename,
+            )
+
         super(Queue, self).save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        permission_name = self.permission_name
+        super(Queue, self).delete(*args, **kwargs)
+
+        # once the Queue is safely deleted, remove the permission (if exists)
+        if permission_name:
+            try:
+                p = Permission.objects.get(codename=permission_name[9:])
+                p.delete()
+            except ObjectDoesNotExist:
+                pass
 
 
 class Ticket(models.Model):
@@ -244,7 +337,7 @@ class Ticket(models.Model):
         (REOPENED_STATUS, _('Reopened')),
         (RESOLVED_STATUS, _('Resolved')),
         (CLOSED_STATUS, _('Closed')),
-        (DUPLICATE_STATUS, _('Duplicate')),        
+        (DUPLICATE_STATUS, _('Duplicate')),
     )
 
     PRIORITY_CHOICES = (
@@ -286,7 +379,7 @@ class Ticket(models.Model):
         )
 
     assigned_to = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         related_name='assigned_to',
         blank=True,
         null=True,
@@ -353,7 +446,7 @@ class Ticket(models.Model):
             if self.assigned_to.get_full_name():
                 return self.assigned_to.get_full_name()
             else:
-                return self.assigned_to.username
+                return self.assigned_to.get_username()
     get_assigned_to = property(_get_assigned_to)
 
     def _get_ticket(self):
@@ -374,13 +467,17 @@ class Ticket(models.Model):
         return u"%shelpdesk/priorities/priority%s.png" % (settings.MEDIA_URL, self.priority)
     get_priority_img = property(_get_priority_img)
 
-    def _get_priority_span(self):
+    def _get_priority_css_class(self):
         """
-        A HTML <span> providing a CSS_styled representation of the priority.
+        Return the boostrap class corresponding to the priority.
         """
-        from django.utils.safestring import mark_safe
-        return mark_safe(u"<span class='priority%s'>%s</span>" % (self.priority, self.priority))
-    get_priority_span = property(_get_priority_span)
+        if self.priority == 2:
+            return "warning"
+        elif self.priority == 1:
+            return "danger"
+        else:
+            return ""
+    get_priority_css_class = property(_get_priority_css_class)
 
     def _get_status(self):
         """
@@ -449,9 +546,11 @@ class Ticket(models.Model):
     class Meta:
         get_latest_by = "created"
         ordering = ('id',)
+        verbose_name = _('Ticket')
+        verbose_name_plural = _('Tickets')
 
-    def __unicode__(self):
-        return u'%s %s' % (self.id, self.title)
+    def __str__(self):
+        return '%s %s' % (self.id, self.title)
 
     def get_absolute_url(self):
         return ('helpdesk_view', (self.id,))
@@ -478,6 +577,7 @@ class FollowUpManager(models.Manager):
         return self.filter(public=True)
 
 
+@python_2_unicode_compatible
 class FollowUp(models.Model):
     """
     A FollowUp is a comment and/or change to a ticket. We keep a simple
@@ -497,8 +597,8 @@ class FollowUp(models.Model):
         )
 
     date = models.DateTimeField(
-        _('Date'), 
-        default = timezone.now()
+        _('Date'),
+        default = timezone.now
         )
 
     title = models.CharField(
@@ -523,7 +623,7 @@ class FollowUp(models.Model):
         )
 
     user = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         blank=True,
         null=True,
         verbose_name=_('User'),
@@ -547,9 +647,11 @@ class FollowUp(models.Model):
 
     class Meta:
         ordering = ['date']
+        verbose_name = _('Follow-up')
+        verbose_name_plural = _('Follow-ups')
 
-    def __unicode__(self):
-        return u'%s' % self.title
+    def __str__(self):
+        return '%s' % self.title
 
     def get_absolute_url(self):
         return u"%s#followup%s" % (self.ticket.get_absolute_url(), self.id)
@@ -561,6 +663,7 @@ class FollowUp(models.Model):
         super(FollowUp, self).save(*args, **kwargs)
 
 
+@python_2_unicode_compatible
 class TicketChange(models.Model):
     """
     For each FollowUp, any changes to the parent ticket (eg Title, Priority,
@@ -589,18 +692,22 @@ class TicketChange(models.Model):
         null=True,
         )
 
-    def __unicode__(self):
-        str = u'%s ' % self.field
+    def __str__(self):
+        out = '%s ' % self.field
         if not self.new_value:
-            str += ugettext('removed')
+            out += ugettext('removed')
         elif not self.old_value:
-            str += ugettext('set to %s') % self.new_value
+            out += ugettext('set to %s') % self.new_value
         else:
-            str += ugettext('changed from "%(old_value)s" to "%(new_value)s"') % {
+            out += ugettext('changed from "%(old_value)s" to "%(new_value)s"') % {
                 'old_value': self.old_value,
                 'new_value': self.new_value
                 }
-        return str
+        return out
+
+    class Meta:
+        verbose_name = _('Ticket change')
+        verbose_name_plural = _('Ticket changes')
 
 
 def attachment_path(instance, filename):
@@ -615,10 +722,11 @@ def attachment_path(instance, filename):
     att_path = os.path.join(settings.MEDIA_ROOT, path)
     if settings.DEFAULT_FILE_STORAGE == "django.core.files.storage.FileSystemStorage":
         if not os.path.exists(att_path):
-            os.makedirs(att_path, 0777)
+            os.makedirs(att_path, 0o777)
     return os.path.join(path, filename)
 
 
+@python_2_unicode_compatible
 class Attachment(models.Model):
     """
     Represents a file attached to a follow-up. This could come from an e-mail
@@ -633,11 +741,12 @@ class Attachment(models.Model):
     file = models.FileField(
         _('File'),
         upload_to=attachment_path,
+        max_length=1000,
         )
 
     filename = models.CharField(
         _('Filename'),
-        max_length=100,
+        max_length=1000,
         )
 
     mime_type = models.CharField(
@@ -659,13 +768,16 @@ class Attachment(models.Model):
             self.followup.id
             )
 
-    def __unicode__(self):
-        return u'%s' % self.filename
+    def __str__(self):
+        return '%s' % self.filename
 
     class Meta:
         ordering = ['filename',]
+        verbose_name = _('Attachment')
+        verbose_name_plural = _('Attachments')
 
 
+@python_2_unicode_compatible
 class PreSetReply(models.Model):
     """
     We can allow the admin to define a number of pre-set replies, used to
@@ -681,7 +793,6 @@ class PreSetReply(models.Model):
     queues = models.ManyToManyField(
         Queue,
         blank=True,
-        null=True,
         help_text=_('Leave blank to allow this reply to be used for all '
             'queues, or select those queues you wish to limit this reply to.'),
         )
@@ -702,11 +813,14 @@ class PreSetReply(models.Model):
 
     class Meta:
         ordering = ['name',]
+        verbose_name = _('Pre-set reply')
+        verbose_name_plural = _('Pre-set replies')
 
-    def __unicode__(self):
-        return u'%s' % self.name
+    def __str__(self):
+        return '%s' % self.name
 
 
+@python_2_unicode_compatible
 class EscalationExclusion(models.Model):
     """
     An 'EscalationExclusion' lets us define a date on which escalation should
@@ -721,7 +835,6 @@ class EscalationExclusion(models.Model):
     queues = models.ManyToManyField(
         Queue,
         blank=True,
-        null=True,
         help_text=_('Leave blank for this exclusion to be applied to all '
             'queues, or select those queues you wish to exclude with this '
             'entry.'),
@@ -737,10 +850,15 @@ class EscalationExclusion(models.Model):
         help_text=_('Date on which escalation should not happen'),
         )
 
-    def __unicode__(self):
-        return u'%s' % self.name
+    def __str__(self):
+        return '%s' % self.name
+
+    class Meta:
+        verbose_name = _('Escalation exclusion')
+        verbose_name_plural = _('Escalation exclusions')
 
 
+@python_2_unicode_compatible
 class EmailTemplate(models.Model):
     """
     Since these are more likely to be changed than other templates, we store
@@ -783,7 +901,7 @@ class EmailTemplate(models.Model):
         help_text=_('The same context is available here as in plain_text, '
             'above.'),
         )
-    
+
     locale = models.CharField(
         _('Locale'),
         max_length=10,
@@ -792,13 +910,16 @@ class EmailTemplate(models.Model):
         help_text=_('Locale of this template.'),
         )
 
-    def __unicode__(self):
-        return u'%s' % self.template_name
+    def __str__(self):
+        return '%s' % self.template_name
 
     class Meta:
         ordering = ['template_name', 'locale']
+        verbose_name = _('e-mail template')
+        verbose_name_plural = _('e-mail templates')
 
 
+@python_2_unicode_compatible
 class KBCategory(models.Model):
     """
     Lets help users help themselves: the Knowledge Base is a categorised
@@ -818,17 +939,20 @@ class KBCategory(models.Model):
         _('Description'),
         )
 
-    def __unicode__(self):
-        return u'%s' % self.title
+    def __str__(self):
+        return '%s' % self.title
 
     class Meta:
         ordering = ['title',]
+        verbose_name = _('Knowledge base category')
+        verbose_name_plural = _('Knowledge base categories')
 
     def get_absolute_url(self):
         return ('helpdesk_kb_category', (), {'slug': self.slug})
     get_absolute_url = models.permalink(get_absolute_url)
 
 
+@python_2_unicode_compatible
 class KBItem(models.Model):
     """
     An item within the knowledgebase. Very straightforward question/answer
@@ -883,21 +1007,24 @@ class KBItem(models.Model):
             return _('Unrated')
     score = property(_score)
 
-    def __unicode__(self):
-        return u'%s' % self.title
+    def __str__(self):
+        return '%s' % self.title
 
     class Meta:
         ordering = ['title',]
+        verbose_name = _('Knowledge base item')
+        verbose_name_plural = _('Knowledge base items')
 
     def get_absolute_url(self):
         return ('helpdesk_kb_item', (self.id,))
     get_absolute_url = models.permalink(get_absolute_url)
 
 
+@python_2_unicode_compatible
 class SavedSearch(models.Model):
     """
     Allow a user to save a ticket search, eg their filtering and sorting
-    options, and optionally share it with other users. This lets people 
+    options, and optionally share it with other users. This lets people
     easily create a set of commonly-used filters, such as:
         * My tickets waiting on me
         * My tickets waiting on submitter
@@ -906,7 +1033,7 @@ class SavedSearch(models.Model):
          etc...
     """
     user = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         verbose_name=_('User'),
         )
 
@@ -928,22 +1055,28 @@ class SavedSearch(models.Model):
         help_text=_('Pickled query object. Be wary changing this.'),
         )
 
-    def __unicode__(self):
+    def __str__(self):
         if self.shared:
-            return u'%s (*)' % self.title
+            return '%s (*)' % self.title
         else:
-            return u'%s' % self.title
+            return '%s' % self.title
 
+    class Meta:
+        verbose_name = _('Saved search')
+        verbose_name_plural = _('Saved searches')
+
+
+@python_2_unicode_compatible
 class UserSettings(models.Model):
     """
     A bunch of user-specific settings that we want to be able to define, such
-    as notification preferences and other things that should probably be 
+    as notification preferences and other things that should probably be
     configurable.
 
     We should always refer to user.usersettings.settings['setting_name'].
     """
 
-    user = models.OneToOneField(User)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL)
 
     settings_pickled = models.TextField(
         _('Settings Dictionary'),
@@ -954,32 +1087,38 @@ class UserSettings(models.Model):
 
     def _set_settings(self, data):
         # data should always be a Python dictionary.
-        import cPickle
+        try:
+            import pickle
+        except ImportError:
+            import cPickle as pickle
         from helpdesk.lib import b64encode
-        self.settings_pickled = b64encode(cPickle.dumps(data))
+        self.settings_pickled = b64encode(pickle.dumps(data))
 
     def _get_settings(self):
         # return a python dictionary representing the pickled data.
-        import cPickle
+        try:
+            import pickle
+        except ImportError:
+            import cPickle as pickle
         from helpdesk.lib import b64decode
         try:
-            return cPickle.loads(b64decode(str(self.settings_pickled)))
-        except cPickle.UnpicklingError:
+            return pickle.loads(b64decode(str(self.settings_pickled)))
+        except pickle.UnpicklingError:
             return {}
 
     settings = property(_get_settings, _set_settings)
 
-    def __unicode__(self):
-        return u'Preferences for %s' % self.user
+    def __str__(self):
+        return 'Preferences for %s' % self.user
 
     class Meta:
-        verbose_name = 'User Settings'
-        verbose_name_plural = 'User Settings'
+        verbose_name = _('User Setting')
+        verbose_name_plural = _('User Settings')
 
 
-def create_usersettings(sender, created_models=[], instance=None, created=False, **kwargs):
+def create_usersettings(sender, instance, created, **kwargs):
     """
-    Helper function to create UserSettings instances as 
+    Helper function to create UserSettings instances as
     required, eg when we first create the UserSettings database
     table via 'syncdb' or when we save a new user.
 
@@ -987,35 +1126,30 @@ def create_usersettings(sender, created_models=[], instance=None, created=False,
     'DoesNotExist: UserSettings matching query does not exist.' errors.
     """
     from helpdesk.settings import DEFAULT_USER_SETTINGS
-    if sender == User and created:
-        # This is a new user, so lets create their settings entry.
-        s, created = UserSettings.objects.get_or_create(user=instance, defaults={'settings': DEFAULT_USER_SETTINGS})
-        s.save()
-    elif UserSettings in created_models:
-        # We just created the UserSettings model, lets create a UserSettings
-        # entry for each existing user. This will only happen once (at install
-        # time, or at upgrade) when the UserSettings model doesn't already 
-        # exist.
-        for u in User.objects.all():
-            try:
-                s = UserSettings.objects.get(user=u)
-            except UserSettings.DoesNotExist:
-                s = UserSettings(user=u, settings=DEFAULT_USER_SETTINGS)
-                s.save()
+    if created:
+        UserSettings.objects.create(user=instance, settings=DEFAULT_USER_SETTINGS)
 
-models.signals.post_syncdb.connect(create_usersettings)
-models.signals.post_save.connect(create_usersettings, sender=User)
+try:
+    # Connecting via settings.AUTH_USER_MODEL (string) fails in Django < 1.7. We need the actual model there.
+    # https://docs.djangoproject.com/en/1.7/topics/auth/customizing/#referencing-the-user-model
+    if VERSION < (1, 7):
+        raise ValueError
+    models.signals.post_save.connect(create_usersettings, sender=settings.AUTH_USER_MODEL)
+except:
+    signal_user = get_user_model()
+    models.signals.post_save.connect(create_usersettings, sender=signal_user)
 
+
+@python_2_unicode_compatible
 class IgnoreEmail(models.Model):
     """
-    This model lets us easily ignore e-mails from certain senders when 
-    processing IMAP and POP3 mailboxes, eg mails from postmaster or from 
+    This model lets us easily ignore e-mails from certain senders when
+    processing IMAP and POP3 mailboxes, eg mails from postmaster or from
     known trouble-makers.
     """
     queues = models.ManyToManyField(
         Queue,
         blank=True,
-        null=True,
         help_text=_('Leave blank for this e-mail to be ignored on all '
             'queues, or select those queues you wish to ignore this e-mail '
             'for.'),
@@ -1049,8 +1183,8 @@ class IgnoreEmail(models.Model):
             'be deleted.'),
         )
 
-    def __unicode__(self):
-        return u'%s' % self.name
+    def __str__(self):
+        return '%s' % self.name
 
     def save(self, *args, **kwargs):
         if not self.date:
@@ -1080,13 +1214,19 @@ class IgnoreEmail(models.Model):
         else:
             return False
 
+    class Meta:
+        verbose_name = _('Ignored e-mail address')
+        verbose_name_plural = _('Ignored e-mail addresses')
+
+
+@python_2_unicode_compatible
 class TicketCC(models.Model):
     """
-    Often, there are people who wish to follow a ticket who aren't the 
+    Often, there are people who wish to follow a ticket who aren't the
     person who originally submitted it. This model provides a way for those
     people to follow a ticket.
 
-    In this circumstance, a 'person' could be either an e-mail address or 
+    In this circumstance, a 'person' could be either an e-mail address or
     an existing system user.
     """
 
@@ -1096,7 +1236,7 @@ class TicketCC(models.Model):
         )
 
     user = models.ForeignKey(
-        User,
+        settings.AUTH_USER_MODEL,
         blank=True,
         null=True,
         help_text=_('User who wishes to receive updates for this ticket.'),
@@ -1113,12 +1253,14 @@ class TicketCC(models.Model):
     can_view = models.BooleanField(
         _('Can View Ticket?'),
         blank=True,
+        default=False,
         help_text=_('Can this CC login to view the ticket details?'),
         )
 
     can_update = models.BooleanField(
         _('Can Update Ticket?'),
         blank=True,
+        default=False,
         help_text=_('Can this CC login and update the ticket?'),
         )
 
@@ -1136,14 +1278,15 @@ class TicketCC(models.Model):
             return self.email
     display = property(_display)
 
-    def __unicode__(self):
-        return u'%s for %s' % (self.display, self.ticket.title)
+    def __str__(self):
+        return '%s for %s' % (self.display, self.ticket.title)
 
 class CustomFieldManager(models.Manager):
-    def get_query_set(self):
-        return super(CustomFieldManager, self).get_query_set().order_by('ordering')
+    def get_queryset(self):
+        return super(CustomFieldManager, self).get_queryset().order_by('ordering')
 
 
+@python_2_unicode_compatible
 class CustomField(models.Model):
     """
     Definitions for custom fields that are glued onto each ticket.
@@ -1157,7 +1300,7 @@ class CustomField(models.Model):
 
     label = models.CharField(
         _('Label'),
-        max_length='30',
+        max_length=30,
         help_text=_('The display label for this field'),
         )
 
@@ -1203,11 +1346,12 @@ class CustomField(models.Model):
         blank=True,
         null=True,
         )
-        
+
     empty_selection_list = models.BooleanField(
         _('Add empty first choice to List?'),
+        default=False,
         help_text=_('Only for List: adds an empty first entry to the choices list, which enforces that the user makes an active choice.'),
-        )        
+        )
 
     list_values = models.TextField(
         _('List Values'),
@@ -1215,7 +1359,7 @@ class CustomField(models.Model):
         blank=True,
         null=True,
         )
-    
+
     ordering = models.IntegerField(
         _('Ordering'),
         help_text=_('Lower numbers are displayed first; higher numbers are listed later'),
@@ -1234,19 +1378,26 @@ class CustomField(models.Model):
     required = models.BooleanField(
         _('Required?'),
         help_text=_('Does the user have to enter a value for this field?'),
+        default=False,
         )
 
     staff_only = models.BooleanField(
         _('Staff Only?'),
         help_text=_('If this is ticked, then the public submission form will NOT show this field'),
+        default=False,
         )
 
     objects = CustomFieldManager()
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s' % (self.name)
 
+    class Meta:
+        verbose_name = _('Custom field')
+        verbose_name_plural = _('Custom fields')
 
+
+@python_2_unicode_compatible
 class TicketCustomFieldValue(models.Model):
     ticket = models.ForeignKey(
         Ticket,
@@ -1260,17 +1411,22 @@ class TicketCustomFieldValue(models.Model):
 
     value = models.TextField(blank=True, null=True)
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s / %s' % (self.ticket, self.field)
 
     class Meta:
         unique_together = ('ticket', 'field'),
 
+    class Meta:
+        verbose_name = _('Ticket custom field value')
+        verbose_name_plural = _('Ticket custom field values')
 
+
+@python_2_unicode_compatible
 class TicketDependency(models.Model):
     """
     The ticket identified by `ticket` cannot be resolved until the ticket in `depends_on` has been resolved.
-    To help enforce this, a helper function `can_be_resolved` on each Ticket instance checks that 
+    To help enforce this, a helper function `can_be_resolved` on each Ticket instance checks that
     these have all been resolved.
     """
     ticket = models.ForeignKey(
@@ -1285,8 +1441,10 @@ class TicketDependency(models.Model):
         related_name='depends_on',
         )
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s / %s' % (self.ticket, self.depends_on)
 
     class Meta:
         unique_together = ('ticket', 'depends_on')
+        verbose_name = _('Ticket dependency')
+        verbose_name_plural = _('Ticket dependencies')

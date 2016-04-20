@@ -28,7 +28,7 @@ def homepage(request):
 
     if (request.user.is_staff or (request.user.is_authenticated() and helpdesk_settings.HELPDESK_ALLOW_NON_STAFF_TICKET_UPDATE)):
         try:
-            if getattr(request.user.usersettings.settings, 'login_view_ticketlist', False):
+            if request.user.usersettings.settings.get('login_view_ticketlist', False):
                 return HttpResponseRedirect(reverse('helpdesk_list'))
             else:
                 return HttpResponseRedirect(reverse('helpdesk_dashboard'))
@@ -95,11 +95,11 @@ def view_ticket(request):
 
             if request.user.is_staff:
                 redirect_url = reverse('helpdesk_view', args=[ticket_id])
-                if request.GET.has_key('close'):
+                if 'close' in request.GET:
                     redirect_url += '?close'
                 return HttpResponseRedirect(redirect_url)
 
-            if request.GET.has_key('close') and ticket.status == Ticket.RESOLVED_STATUS:
+            if 'close' in request.GET and ticket.status == Ticket.RESOLVED_STATUS:
                 from helpdesk.views.staff import update_ticket
                 # Trick the update_ticket() view into thinking it's being called with
                 # a valid POST.
@@ -163,7 +163,7 @@ def contactform(request):
 
 def change_language(request):
     return_to = ''
-    if request.GET.has_key('return_to'):
+    if 'return_to' in request.GET:
         return_to = request.GET['return_to']
 
     return render_to_response('helpdesk/public_change_language.html',
