@@ -13,11 +13,15 @@ through templates/helpdesk/help_api.html.
 
 from django import forms
 from django.contrib.auth import authenticate
-from django.contrib.auth.models import User
+try:
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+except ImportError:
+    from django.contrib.auth.models import User
 from django.http import HttpResponse
 from django.shortcuts import render_to_response
 from django.template import loader, Context
-from django.utils import simplejson
+import simplejson
 from django.views.decorators.csrf import csrf_exempt
 
 try:
@@ -28,6 +32,8 @@ except ImportError:
 from helpdesk.forms import TicketForm
 from helpdesk.lib import send_templated_mail, safe_template_context
 from helpdesk.models import Ticket, Queue, FollowUp
+
+import warnings
 
 STATUS_OK = 200
 
@@ -49,7 +55,13 @@ def api(request, method):
           must be valid users
         * The method must match one of the public methods of the API class.
 
+
+    THIS IS DEPRECATED AS OF DECEMBER 2015 AND WILL BE REMOVED IN JANUARY 2016.
+    SEE https://github.com/rossp/django-helpdesk/issues/198 FOR DETAILS
+
     """
+
+    warnings.warn("django-helpdesk API will be removed in January 2016. See https://github.com/rossp/django-helpdesk/issues/198 for details.", category=DeprecationWarning)
 
     if method == 'help':
         return render_to_response('helpdesk/help_api.html')
@@ -106,7 +118,7 @@ class API:
     def api_public_create_ticket(self):
         form = TicketForm(self.request.POST)
         form.fields['queue'].choices = [[q.id, q.title] for q in Queue.objects.all()]
-        form.fields['assigned_to'].choices = [[u.id, u.username] for u in User.objects.filter(is_active=True)]
+        form.fields['assigned_to'].choices = [[u.id, u.get_username()] for u in User.objects.filter(is_active=True)]
 
         if form.is_valid():
             ticket = form.save(user=self.request.user)
@@ -198,7 +210,7 @@ class API:
 
         context = safe_template_context(ticket)
         context['comment'] = f.comment
-        
+
         messages_sent_to = []
 
         if public and ticket.submitter_email:
@@ -233,14 +245,20 @@ class API:
                 )
             messages_sent_to.append(ticket.queue.updated_ticket_cc)
 
-        if ticket.assigned_to and self.request.user != ticket.assigned_to and getattr(ticket.assigned_to.usersettings.settings, 'email_on_ticket_apichange', False) and ticket.assigned_to.email and ticket.assigned_to.email not in messages_sent_to:
+        if (
+            ticket.assigned_to and
+            self.request.user != ticket.assigned_to and
+            ticket.assigned_to.usersettings.settings.get('email_on_ticket_apichange', False) and
+            ticket.assigned_to.email and
+            ticket.assigned_to.email not in messages_sent_to
+        ):
             send_templated_mail(
                 'updated_owner',
                 context,
                 recipients=ticket.assigned_to.email,
                 sender=ticket.queue.from_address,
                 fail_silently=True,
-                )
+            )
 
         ticket.save()
 
@@ -272,7 +290,7 @@ class API:
         context['resolution'] = f.comment
 
         subject = '%s %s (Resolved)' % (ticket.ticket, ticket.title)
-        
+
         messages_sent_to = []
 
         if ticket.submitter_email:
@@ -321,4 +339,3 @@ class API:
         ticket.save()
 
         return api_return(STATUS_OK)
-
