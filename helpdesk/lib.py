@@ -252,6 +252,11 @@ def text_is_spam(text, request):
         agent='django-helpdesk',
     )
 
+    lower_text = text.lower()
+    for domain in ('densito.pl', 'marketing-mail.pl', 'esendroute.com', 'Hot Sales', 'Link Building', ):
+        if domain.lower() in lower_text:
+            return True
+
     if hasattr(settings, 'TYPEPAD_ANTISPAM_API_KEY'):
         ak.setAPIKey(key = settings.TYPEPAD_ANTISPAM_API_KEY)
         ak.baseurl = 'api.antispam.typepad.com/1.1/'
